@@ -34,7 +34,6 @@ import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableStateListOf
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -43,20 +42,28 @@ import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
-import androidx.hilt.navigation.compose.hiltViewModel
+import androidx.hilt.lifecycle.viewmodel.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
-import androidx.navigation3.runtime.NavEntry
+import androidx.lifecycle.viewmodel.navigation3.rememberViewModelStoreNavEntryDecorator
+import androidx.navigation3.runtime.NavKey
+import androidx.navigation3.runtime.entryProvider
+import androidx.navigation3.runtime.rememberNavBackStack
+import androidx.navigation3.runtime.rememberSaveableStateHolderNavEntryDecorator
 import androidx.navigation3.ui.NavDisplay
+import kotlinx.serialization.Serializable
 import tech.capullo.telecloudradio.auth.AuthScreen
 import tech.capullo.telecloudradio.data.playlist.ActivePlayback
 import tech.capullo.telecloudradio.ui.groupselector.GroupSelectorScreen
 import tech.capullo.telecloudradio.ui.player.PlayerScreen
 import tech.capullo.telecloudradio.ui.settings.SettingsScreen
 
-data object AuthRoute
-data object GroupSelectorRoute
-data object SettingsRoute
-data class PlayerRoute(val chatId: Long, val chatTitle: String)
+@Serializable data object AuthRoute : NavKey
+
+@Serializable data object GroupSelectorRoute : NavKey
+
+@Serializable data object SettingsRoute : NavKey
+
+@Serializable data class PlayerRoute(val chatId: Long, val chatTitle: String) : NavKey
 
 // Sentinel chatId for a listen-in (snapclient) session — the now-playing screen
 // then renders the remote server's stream instead of a Telegram station.
@@ -64,51 +71,53 @@ const val LISTEN_IN_CHAT_ID = Long.MIN_VALUE
 
 @Composable
 fun AppNavHost(appViewModel: AppViewModel = hiltViewModel()) {
-    val backStack = remember { mutableStateListOf<Any>(AuthRoute) }
+    val backStack = rememberNavBackStack(AuthRoute)
     val activePlayback by appViewModel.activePlayback.collectAsStateWithLifecycle()
 
     Box(Modifier.fillMaxSize()) {
         NavDisplay(
             backStack = backStack,
             modifier = Modifier.fillMaxSize(),
-            entryProvider = { key ->
-                when (key) {
-                    is AuthRoute -> NavEntry(key) {
-                        AuthScreen(onAuthenticated = {
-                            val dest = appViewModel.getAutoOpenDestination()
-                            if (dest != null) {
-                                // addAll is atomic: NavDisplay renders one transition, not two
-                                backStack.addAll(listOf(GroupSelectorRoute, PlayerRoute(dest.first, dest.second)))
-                            } else {
-                                backStack.add(GroupSelectorRoute)
-                            }
-                        })
-                    }
-                    is GroupSelectorRoute -> NavEntry(key) {
-                        GroupSelectorScreen(
-                            onGroupSelected = { chatId, chatTitle ->
-                                appViewModel.saveLastGroup(chatId, chatTitle)
-                                backStack.add(PlayerRoute(chatId, chatTitle))
-                            },
-                            // Listen-in: don't persist as last-group (sentinel chatId);
-                            // the now-playing screen renders the remote stream.
-                            onJoinServer = { _, _, name ->
-                                backStack.add(PlayerRoute(LISTEN_IN_CHAT_ID, name))
-                            },
-                        )
-                    }
-                    is PlayerRoute -> NavEntry(key) {
-                        PlayerScreen(
-                            chatId = key.chatId,
-                            chatTitle = key.chatTitle,
-                            onSettings = { backStack.add(SettingsRoute) },
-                            onBack = { backStack.removeLastOrNull() },
-                        )
-                    }
-                    is SettingsRoute -> NavEntry(key) {
-                        SettingsScreen(onBack = { backStack.removeLastOrNull() })
-                    }
-                    else -> NavEntry(Unit) {}
+            onBack = { backStack.removeLastOrNull() },
+            entryDecorators = listOf(
+                rememberSaveableStateHolderNavEntryDecorator(),
+                rememberViewModelStoreNavEntryDecorator(),
+            ),
+            entryProvider = entryProvider {
+                entry<AuthRoute> {
+                    AuthScreen(onAuthenticated = {
+                        val dest = appViewModel.getAutoOpenDestination()
+                        if (dest != null) {
+                            // addAll is atomic: NavDisplay renders one transition, not two
+                            backStack.addAll(listOf(GroupSelectorRoute, PlayerRoute(dest.first, dest.second)))
+                        } else {
+                            backStack.add(GroupSelectorRoute)
+                        }
+                    })
+                }
+                entry<GroupSelectorRoute> {
+                    GroupSelectorScreen(
+                        onGroupSelected = { chatId, chatTitle ->
+                            appViewModel.saveLastGroup(chatId, chatTitle)
+                            backStack.add(PlayerRoute(chatId, chatTitle))
+                        },
+                        // Listen-in: don't persist as last-group (sentinel chatId);
+                        // the now-playing screen renders the remote stream.
+                        onJoinServer = { _, _, name ->
+                            backStack.add(PlayerRoute(LISTEN_IN_CHAT_ID, name))
+                        },
+                    )
+                }
+                entry<PlayerRoute> { key ->
+                    PlayerScreen(
+                        chatId = key.chatId,
+                        chatTitle = key.chatTitle,
+                        onSettings = { backStack.add(SettingsRoute) },
+                        onBack = { backStack.removeLastOrNull() },
+                    )
+                }
+                entry<SettingsRoute> {
+                    SettingsScreen(onBack = { backStack.removeLastOrNull() })
                 }
             },
         )
