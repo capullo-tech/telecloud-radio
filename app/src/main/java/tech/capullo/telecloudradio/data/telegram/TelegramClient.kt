@@ -20,35 +20,35 @@ interface TelegramClient {
     suspend fun getChats(limit: Int): List<TelegramChat>
     suspend fun getMessageReactions(chatId: Long, messageId: Long): String?
     suspend fun getReactionsInfo(chatId: Long, messageId: Long): MessageReactionsInfo
+
     // emoji = null clears the current user's reaction
     suspend fun setOwnReaction(chatId: Long, messageId: Long, emoji: String?)
+
     // Audio (music) messages
     suspend fun getChatHistory(chatId: Long, fromMessageId: Long, limit: Int): HistoryPage
+
     // Documents whose mime/extension is audio (files sent "as file")
     suspend fun getChatDocumentHistory(chatId: Long, fromMessageId: Long, limit: Int): HistoryPage
-    suspend fun downloadFile(chatId: Long, messageId: Long, onProgress: (Float) -> Unit = {}): String
+    suspend fun downloadFile(
+        chatId: Long,
+        messageId: Long,
+        onProgress: (Float) -> Unit = {},
+    ): String
     fun close()
 }
 
 // One page of chat history; nextFromMessageId is 0 when there are no more results.
 // messages may be empty while more history remains (page had no audio in it).
-data class HistoryPage(
-    val messages: List<TelegramMessage>,
-    val nextFromMessageId: Long,
-)
+data class HistoryPage(val messages: List<TelegramMessage>, val nextFromMessageId: Long)
 
-data class ReactorEntry(
-    val emoji: String,
-    val name: String,
-    val isSelf: Boolean,
-)
+data class ReactorEntry(val emoji: String, val name: String, val isSelf: Boolean)
 
 data class MessageReactionsInfo(
-    val summary: String?,          // concatenated emoji, same format as MediaMessageEntity.reactions
-    val ownEmoji: String?,         // reaction chosen by the current user, if any
-    val canListReactors: Boolean,  // false in channels (anonymous reactions)
+    val summary: String?, // concatenated emoji, same format as MediaMessageEntity.reactions
+    val ownEmoji: String?, // reaction chosen by the current user, if any
+    val canListReactors: Boolean, // false in channels (anonymous reactions)
     val reactors: List<ReactorEntry>,
-    val available: List<String>,   // emoji the current user may react with
+    val available: List<String>, // emoji the current user may react with
 )
 
 sealed class AuthState {
@@ -61,11 +61,7 @@ sealed class AuthState {
     data class Error(val message: String) : AuthState()
 }
 
-data class TelegramChat(
-    val id: Long,
-    val title: String,
-    val type: ChatType,
-)
+data class TelegramChat(val id: Long, val title: String, val type: ChatType)
 
 data class TelegramMessage(
     val id: Long,

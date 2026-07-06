@@ -54,7 +54,11 @@ class SnapserverProcess(private val context: Context) {
     }
 
     private val pipeArgs = listOf(
-        STREAM_NAME, CODEC, PIPE_MODE, DRYOUT_MS, SAMPLE_FORMAT,
+        STREAM_NAME,
+        CODEC,
+        PIPE_MODE,
+        DRYOUT_MS,
+        SAMPLE_FORMAT,
         "controlscript=$nativeLibDir/libsnapcontrol.so",
     ).joinToString("&")
 
@@ -123,8 +127,11 @@ class SnapserverProcess(private val context: Context) {
             is JSONObject -> {
                 val keys = node.keys().asSequence().toList()
                 for (key in keys) {
-                    if (key == "muted") node.put("muted", false)
-                    else clearMuted(node.opt(key))
+                    if (key == "muted") {
+                        node.put("muted", false)
+                    } else {
+                        clearMuted(node.opt(key))
+                    }
                 }
             }
             is JSONArray -> for (i in 0 until node.length()) clearMuted(node.opt(i))

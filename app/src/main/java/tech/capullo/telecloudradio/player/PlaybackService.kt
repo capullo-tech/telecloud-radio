@@ -97,7 +97,10 @@ class PlaybackService : MediaSessionService() {
 
         // FIFO + snapserver process wrapper must exist before the sink opens the pipe
         val fifoPath = snapcastManager.prepareBroadcast()
-        val sink = FifoAudioBufferSink(fifoPath).also { fifoSink = it; it.open() }
+        val sink = FifoAudioBufferSink(fifoPath).also {
+            fifoSink = it
+            it.open()
+        }
 
         // Sink chain: [mix → 2ch] → [resample → 44100] → [balance] → [tee → FIFO].
         // Balance sits before the tee so every listener (local snapclient, LAN
@@ -117,7 +120,10 @@ class PlaybackService : MediaSessionService() {
                     .setEnableFloatOutput(false) // keep the chain in 16-bit PCM
                     .setAudioProcessorChain(
                         DefaultAudioSink.DefaultAudioProcessorChain(
-                            mixer, resampler, balanceProcessor, TeeAudioProcessor(sink),
+                            mixer,
+                            resampler,
+                            balanceProcessor,
+                            TeeAudioProcessor(sink),
                         ),
                     )
                     .build()
@@ -146,7 +152,8 @@ class PlaybackService : MediaSessionService() {
                 // its Oboe stream grabs focus a few seconds in, a focus-handling
                 // ExoPlayer would see a "loss" and pause itself, stalling the tee →
                 // snapserver goes idle → snapclient runs out of chunks (silence).
-                /* handleAudioFocus = */ false,
+                /* handleAudioFocus = */
+                false,
             )
             // Becoming-noisy (headphone unplug) must not pause the broadcast either —
             // other rooms/web players keep listening.
@@ -175,20 +182,18 @@ class PlaybackService : MediaSessionService() {
         // lock-screen skip buttons. Force the commands available and route them through
         // ActiveTrackRepository, the same path the mini player uses.
         val forwardingPlayer = object : ForwardingPlayer(player) {
-            override fun getAvailableCommands(): Player.Commands =
-                super.getAvailableCommands().buildUpon()
-                    .add(Player.COMMAND_SEEK_TO_NEXT)
-                    .add(Player.COMMAND_SEEK_TO_NEXT_MEDIA_ITEM)
-                    .add(Player.COMMAND_SEEK_TO_PREVIOUS)
-                    .add(Player.COMMAND_SEEK_TO_PREVIOUS_MEDIA_ITEM)
-                    .build()
+            override fun getAvailableCommands(): Player.Commands = super.getAvailableCommands().buildUpon()
+                .add(Player.COMMAND_SEEK_TO_NEXT)
+                .add(Player.COMMAND_SEEK_TO_NEXT_MEDIA_ITEM)
+                .add(Player.COMMAND_SEEK_TO_PREVIOUS)
+                .add(Player.COMMAND_SEEK_TO_PREVIOUS_MEDIA_ITEM)
+                .build()
 
-            override fun isCommandAvailable(command: Int): Boolean =
-                command == Player.COMMAND_SEEK_TO_NEXT ||
-                    command == Player.COMMAND_SEEK_TO_NEXT_MEDIA_ITEM ||
-                    command == Player.COMMAND_SEEK_TO_PREVIOUS ||
-                    command == Player.COMMAND_SEEK_TO_PREVIOUS_MEDIA_ITEM ||
-                    super.isCommandAvailable(command)
+            override fun isCommandAvailable(command: Int): Boolean = command == Player.COMMAND_SEEK_TO_NEXT ||
+                command == Player.COMMAND_SEEK_TO_NEXT_MEDIA_ITEM ||
+                command == Player.COMMAND_SEEK_TO_PREVIOUS ||
+                command == Player.COMMAND_SEEK_TO_PREVIOUS_MEDIA_ITEM ||
+                super.isCommandAvailable(command)
 
             override fun seekToNext() {
                 activeTrackRepository.emitCommand(PlaybackCommand.NEXT)

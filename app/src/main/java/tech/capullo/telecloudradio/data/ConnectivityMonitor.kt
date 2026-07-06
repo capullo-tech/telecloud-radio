@@ -12,9 +12,7 @@ import javax.inject.Inject
 import javax.inject.Singleton
 
 @Singleton
-class ConnectivityMonitor @Inject constructor(
-    @ApplicationContext context: Context,
-) {
+class ConnectivityMonitor @Inject constructor(@ApplicationContext context: Context) {
     private val cm = context.getSystemService(Context.CONNECTIVITY_SERVICE) as ConnectivityManager
     private val _isOnline = MutableStateFlow(isCurrentlyOnline())
     val isOnline: StateFlow<Boolean> = _isOnline
@@ -23,10 +21,17 @@ class ConnectivityMonitor @Inject constructor(
         val request = NetworkRequest.Builder()
             .addCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET)
             .build()
-        cm.registerNetworkCallback(request, object : ConnectivityManager.NetworkCallback() {
-            override fun onAvailable(network: Network) { _isOnline.value = true }
-            override fun onLost(network: Network) { _isOnline.value = isCurrentlyOnline() }
-        })
+        cm.registerNetworkCallback(
+            request,
+            object : ConnectivityManager.NetworkCallback() {
+                override fun onAvailable(network: Network) {
+                    _isOnline.value = true
+                }
+                override fun onLost(network: Network) {
+                    _isOnline.value = isCurrentlyOnline()
+                }
+            },
+        )
     }
 
     private fun isCurrentlyOnline(): Boolean {

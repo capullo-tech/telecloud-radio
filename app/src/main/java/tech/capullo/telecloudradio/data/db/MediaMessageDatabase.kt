@@ -44,10 +44,18 @@ abstract class MediaMessageDatabase : RoomDatabase() {
         }
         val MIGRATION_4_5 = object : Migration(4, 5) {
             override fun migrate(database: SupportSQLiteDatabase) {
-                database.execSQL("ALTER TABLE audio_analysis ADD COLUMN lufs REAL NOT NULL DEFAULT -999")
-                database.execSQL("ALTER TABLE audio_analysis ADD COLUMN truePeakDb REAL NOT NULL DEFAULT -999")
-                database.execSQL("ALTER TABLE audio_analysis ADD COLUMN clipping INTEGER NOT NULL DEFAULT 0")
-                database.execSQL("ALTER TABLE audio_analysis ADD COLUMN totalSamples INTEGER NOT NULL DEFAULT 0")
+                database.execSQL(
+                    "ALTER TABLE audio_analysis ADD COLUMN lufs REAL NOT NULL DEFAULT -999",
+                )
+                database.execSQL(
+                    "ALTER TABLE audio_analysis ADD COLUMN truePeakDb REAL NOT NULL DEFAULT -999",
+                )
+                database.execSQL(
+                    "ALTER TABLE audio_analysis ADD COLUMN clipping INTEGER NOT NULL DEFAULT 0",
+                )
+                database.execSQL(
+                    "ALTER TABLE audio_analysis ADD COLUMN totalSamples INTEGER NOT NULL DEFAULT 0",
+                )
                 database.execSQL("ALTER TABLE audio_analysis ADD COLUMN channelStatsCsv TEXT")
             }
         }

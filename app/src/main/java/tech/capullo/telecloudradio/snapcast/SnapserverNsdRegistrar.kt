@@ -15,8 +15,14 @@ class SnapserverNsdRegistrar(context: Context) {
     fun start() {
         if (listeners.isNotEmpty()) return
         register(SnapserverDiscoveryManager.SERVICE_TYPE, SnapserverDiscoveryManager.SERVICE_PORT)
-        register(SnapserverDiscoveryManager.STREAM_SERVICE_TYPE, SnapserverDiscoveryManager.STREAM_SERVICE_PORT)
-        Log.d(TAG, "Snapserver NSD registered as '${SnapserverDiscoveryManager.SERVICE_NAME_PREFIX}${Build.MODEL}'")
+        register(
+            SnapserverDiscoveryManager.STREAM_SERVICE_TYPE,
+            SnapserverDiscoveryManager.STREAM_SERVICE_PORT,
+        )
+        Log.d(
+            TAG,
+            "Snapserver NSD registered as '${SnapserverDiscoveryManager.SERVICE_NAME_PREFIX}${Build.MODEL}'",
+        )
     }
 
     fun stop() {

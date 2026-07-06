@@ -40,7 +40,11 @@ class ActiveTrackRepository @Inject constructor() {
         _activePlayback.value = _activePlayback.value?.copy(isPlaying = isPlaying)
     }
 
-    fun emitCommand(cmd: PlaybackCommand) { _command.tryEmit(cmd) }
+    fun emitCommand(cmd: PlaybackCommand) {
+        _command.tryEmit(cmd)
+    }
 
-    fun clear() { _activePlayback.value = null }
+    fun clear() {
+        _activePlayback.value = null
+    }
 }

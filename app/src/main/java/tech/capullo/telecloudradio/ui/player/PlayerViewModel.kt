@@ -113,6 +113,7 @@ class PlayerViewModel @Inject constructor(
     private var prefetchJob: Job? = null
     private var positionJob: Job? = null
     private var sleepTimerJob: Job? = null
+
     // Set when the countdown hit zero mid-track: playback finishes the current
     // track, then onTrackEnded pauses instead of advancing.
     private var sleepAtTrackEnd = false
@@ -142,7 +143,8 @@ class PlayerViewModel @Inject constructor(
                 }
                 override fun onIsPlayingChanged(isPlaying: Boolean) {
                     if (isPlaying && !controllerPreparedForCurrentChat) {
-                        controller?.pause(); return
+                        controller?.pause()
+                        return
                     }
                     _uiState.value = _uiState.value.copy(isPlaying = isPlaying)
                     activeTrackRepository.updateIsPlaying(isPlaying)
@@ -258,8 +260,11 @@ class PlayerViewModel @Inject constructor(
                 basePlaylist = emptyList()
                 playlist = emptyList()
                 _uiState.value = PlayerUiState(
-                    error = if (isOnline) "No audio tracks found in this station"
-                            else "No local tracks available offline",
+                    error = if (isOnline) {
+                        "No audio tracks found in this station"
+                    } else {
+                        "No local tracks available offline"
+                    },
                 )
                 return@launch
             }
@@ -268,7 +273,9 @@ class PlayerViewModel @Inject constructor(
             val savedMessageId = getLastPlayed(chatId)
             val startIndex = if (savedMessageId != null) {
                 playlist.indexOfFirst { it.messageId == savedMessageId }.takeIf { it >= 0 } ?: 0
-            } else 0
+            } else {
+                0
+            }
             currentIndex = startIndex
             val track = playlist[startIndex]
             _uiState.value = PlayerUiState(
@@ -335,7 +342,12 @@ class PlayerViewModel @Inject constructor(
         if (chatId == 0L) return
         context.getSharedPreferences("player_prefs", Context.MODE_PRIVATE).edit()
             .putString("queue_ids_$chatId", playlist.joinToString(",") { it.messageId.toString() })
-            .putString("base_ids_$chatId", basePlaylist.joinToString(",") { it.messageId.toString() })
+            .putString(
+                "base_ids_$chatId",
+                basePlaylist.joinToString(",") {
+                    it.messageId.toString()
+                },
+            )
             .putString("play_order_$chatId", _uiState.value.playOrder.name)
             .putString("filters_$chatId", _uiState.value.queueFilters.toJson())
             .apply()
@@ -363,7 +375,9 @@ class PlayerViewModel @Inject constructor(
             val added = telegramRepository.syncChatById(chatId)
             if (added > 0) {
                 mergeNewTracks()
-                _downloadToast.tryEmit("$added new track${if (added > 1) "s" else ""} · library updated")
+                _downloadToast.tryEmit(
+                    "$added new track${if (added > 1) "s" else ""} · library updated",
+                )
             }
         }
     }
@@ -387,8 +401,11 @@ class PlayerViewModel @Inject constructor(
             PlayOrder.SHUFFLED -> {
                 val current = orderedPlaylist.firstOrNull { it.messageId == currentTrackId }
                 if (current != null) {
-                    listOf(current) + orderedPlaylist.filter { it.messageId != currentTrackId }.shuffled()
-                } else orderedPlaylist.shuffled()
+                    listOf(current) +
+                        orderedPlaylist.filter { it.messageId != currentTrackId }.shuffled()
+                } else {
+                    orderedPlaylist.shuffled()
+                }
             }
         }
         _uiState.value = _uiState.value.copy(
@@ -542,7 +559,8 @@ class PlayerViewModel @Inject constructor(
         positionJob?.cancel()
         positionJob = viewModelScope.launch {
             while (true) {
-                _uiState.value = _uiState.value.copy(currentPosition = controller?.currentPosition ?: 0L)
+                _uiState.value =
+                    _uiState.value.copy(currentPosition = controller?.currentPosition ?: 0L)
                 delay(500L)
             }
         }
@@ -578,7 +596,8 @@ class PlayerViewModel @Inject constructor(
         sleepTimerJob?.cancel()
         sleepTimerJob = null
         sleepAtTrackEnd = false
-        _uiState.value = _uiState.value.copy(sleepTimerActive = false, sleepTimerSecondsRemaining = 0)
+        _uiState.value =
+            _uiState.value.copy(sleepTimerActive = false, sleepTimerSecondsRemaining = 0)
     }
 
     private fun onTrackEnded() {
@@ -593,18 +612,36 @@ class PlayerViewModel @Inject constructor(
             // currentIndex is -1 when the playing track is filtered out of the queue —
             // repeat it in place rather than indexing into the playlist
             Player.REPEAT_MODE_ONE ->
-                if (currentIndex >= 0) viewModelScope.launch { playTrack(currentIndex) }
-                else controller?.run { seekTo(0L); play() }
-            Player.REPEAT_MODE_ALL -> viewModelScope.launch { playTrack((currentIndex + 1) % playlist.size) }
-            else -> if (currentIndex + 1 < playlist.size) viewModelScope.launch { playTrack(currentIndex + 1) }
+                if (currentIndex >= 0) {
+                    viewModelScope.launch { playTrack(currentIndex) }
+                } else {
+                    controller?.run {
+                        seekTo(0L)
+                        play()
+                    }
+                }
+            Player.REPEAT_MODE_ALL -> viewModelScope.launch {
+                playTrack((currentIndex + 1) % playlist.size)
+            }
+            else ->
+                if (currentIndex + 1 <
+                    playlist.size
+                ) {
+                    viewModelScope.launch { playTrack(currentIndex + 1) }
+                }
         }
     }
 
     fun nextTrack() {
         if (_uiState.value.isLoading) return
         val next = currentIndex + 1
-        if (next < playlist.size) viewModelScope.launch { playTrack(next) }
-        else if (_uiState.value.repeatMode == Player.REPEAT_MODE_ALL) viewModelScope.launch { playTrack(0) }
+        if (next < playlist.size) {
+            viewModelScope.launch { playTrack(next) }
+        } else if (_uiState.value.repeatMode ==
+            Player.REPEAT_MODE_ALL
+        ) {
+            viewModelScope.launch { playTrack(0) }
+        }
     }
 
     fun prevTrack() {
@@ -706,7 +743,9 @@ class PlayerViewModel @Inject constructor(
                         spectralCutoffHz = result.spectralCutoffHz,
                         nyquistHz = result.nyquistHz,
                         likelyTrueLossless = result.likelyTrueLossless,
-                        spectrumCsv = result.spectrumMagnitudesDb.joinToString(",") { "%.1f".format(it) },
+                        spectrumCsv = result.spectrumMagnitudesDb.joinToString(",") {
+                            "%.1f".format(it)
+                        },
                         spectrogramPath = result.spectrogramFile?.absolutePath,
                         analyzedAt = System.currentTimeMillis(),
                         lufs = result.lufs,
@@ -714,12 +753,17 @@ class PlayerViewModel @Inject constructor(
                         clipping = result.clipping,
                         totalSamples = result.totalSamples,
                         channelStatsCsv = result.channelStats
-                            .joinToString(";") { "${"%.2f".format(it.peakDb)},${"%.2f".format(it.rmsDb)},${"%.2f".format(it.drDb)}" }
+                            .joinToString(";") {
+                                "${"%.2f".format(
+                                    it.peakDb,
+                                )},${"%.2f".format(it.rmsDb)},${"%.2f".format(it.drDb)}"
+                            }
                             .takeIf { result.channelStats.isNotEmpty() },
                     )
                     audioAnalysisDao.insert(entity)
                     if (_uiState.value.track?.messageId == track.messageId) {
-                        _uiState.value = _uiState.value.copy(isAnalyzing = false, audioAnalysis = entity)
+                        _uiState.value =
+                            _uiState.value.copy(isAnalyzing = false, audioAnalysis = entity)
                     }
                     return@launch
                 }
@@ -744,7 +788,8 @@ class PlayerViewModel @Inject constructor(
                             MediaStore.Downloads.EXTERNAL_CONTENT_URI,
                             arrayOf(MediaStore.Downloads._ID),
                             "${MediaStore.Downloads.DISPLAY_NAME} = ?",
-                            arrayOf(fileName), null,
+                            arrayOf(fileName),
+                            null,
                         )
                         val alreadyExists = (existing?.count ?: 0) > 0
                         existing?.close()
@@ -758,7 +803,8 @@ class PlayerViewModel @Inject constructor(
                             put(MediaStore.Downloads.IS_PENDING, 1)
                         }
                         val uri = context.contentResolver
-                            .insert(MediaStore.Downloads.EXTERNAL_CONTENT_URI, values) ?: return@runCatching
+                            .insert(MediaStore.Downloads.EXTERNAL_CONTENT_URI, values)
+                            ?: return@runCatching
                         context.contentResolver.openOutputStream(uri)?.use { out ->
                             File(path).inputStream().use { it.copyTo(out) }
                         }
@@ -766,7 +812,9 @@ class PlayerViewModel @Inject constructor(
                         values.put(MediaStore.Downloads.IS_PENDING, 0)
                         context.contentResolver.update(uri, values, null, null)
                     } else {
-                        val dir = Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS)
+                        val dir = Environment.getExternalStoragePublicDirectory(
+                            Environment.DIRECTORY_DOWNLOADS,
+                        )
                         dir.mkdirs()
                         val dest = File(dir, fileName)
                         if (dest.exists()) {
@@ -812,7 +860,8 @@ class PlayerViewModel @Inject constructor(
                 if (playlist.isNotEmpty()) {
                     playTrack(index.coerceAtMost(playlist.size - 1))
                 } else {
-                    _uiState.value = _uiState.value.copy(isLoading = false, error = "No tracks left in queue")
+                    _uiState.value =
+                        _uiState.value.copy(isLoading = false, error = "No tracks left in queue")
                 }
                 return
             }
@@ -881,7 +930,10 @@ class PlayerViewModel @Inject constructor(
         if (connectivityMonitor.isOnline.value) {
             viewModelScope.launch {
                 runCatching {
-                    val reactions = telegramRepository.refreshReactions(track.chatId, track.messageId)
+                    val reactions = telegramRepository.refreshReactions(
+                        track.chatId,
+                        track.messageId,
+                    )
                     if (_uiState.value.track?.messageId == track.messageId) {
                         _uiState.value = _uiState.value.copy(
                             track = _uiState.value.track!!.copy(reactions = reactions),
@@ -954,7 +1006,9 @@ class PlayerViewModel @Inject constructor(
                     reactionsInfo = info ?: _uiState.value.reactionsInfo,
                     track = if (info != null) {
                         _uiState.value.track?.copy(reactions = info.summary)
-                    } else _uiState.value.track,
+                    } else {
+                        _uiState.value.track
+                    },
                 )
             }
         }

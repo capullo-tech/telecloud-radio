@@ -36,10 +36,7 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import tech.capullo.telecloudradio.data.telegram.AuthState
 
 @Composable
-fun AuthScreen(
-    onAuthenticated: () -> Unit,
-    viewModel: AuthViewModel = hiltViewModel(),
-) {
+fun AuthScreen(onAuthenticated: () -> Unit, viewModel: AuthViewModel = hiltViewModel()) {
     val authState by viewModel.authState.collectAsStateWithLifecycle()
     val error by viewModel.error.collectAsStateWithLifecycle()
 
@@ -95,7 +92,9 @@ private fun CredentialsForm(onSubmit: (apiId: String, apiHash: String) -> Unit) 
             text = buildAnnotatedString {
                 append("Connect your Telegram account.\nGet your API credentials at ")
                 withLink(LinkAnnotation.Url("https://my.telegram.org/auth")) {
-                    withStyle(SpanStyle(color = linkColor, textDecoration = TextDecoration.Underline)) {
+                    withStyle(
+                        SpanStyle(color = linkColor, textDecoration = TextDecoration.Underline),
+                    ) {
                         append("my.telegram.org/auth")
                     }
                 }

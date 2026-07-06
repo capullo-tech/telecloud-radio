@@ -21,13 +21,13 @@ import androidx.compose.foundation.gestures.detectHorizontalDragGestures
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
-import androidx.compose.foundation.layout.aspectRatio
+import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.ExperimentalLayoutApi
 import androidx.compose.foundation.layout.FlowRow
-import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
@@ -42,37 +42,37 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.automirrored.filled.QueueMusic
 import androidx.compose.material.icons.filled.ArrowDownward
+import androidx.compose.material.icons.filled.ArrowUpward
 import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.CheckCircle
+import androidx.compose.material.icons.filled.Close
+import androidx.compose.material.icons.filled.Download
 import androidx.compose.material.icons.filled.DragHandle
+import androidx.compose.material.icons.filled.Equalizer
 import androidx.compose.material.icons.filled.GraphicEq
+import androidx.compose.material.icons.filled.KeyboardArrowUp
 import androidx.compose.material.icons.filled.Memory
 import androidx.compose.material.icons.filled.MultilineChart
 import androidx.compose.material.icons.filled.Numbers
-import androidx.compose.material.icons.filled.ShowChart
-import androidx.compose.material.icons.filled.Speed
-import androidx.compose.material.icons.filled.Storage
-import androidx.compose.material.icons.filled.SurroundSound
-import androidx.compose.material.icons.filled.TrendingUp
-import androidx.compose.material.icons.filled.ArrowUpward
-import androidx.compose.material.icons.filled.Close
-import androidx.compose.material.icons.filled.Download
-import androidx.compose.material.icons.filled.Equalizer
-import androidx.compose.material.icons.filled.KeyboardArrowUp
 import androidx.compose.material.icons.filled.Pause
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.Repeat
 import androidx.compose.material.icons.filled.RepeatOne
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.Settings
+import androidx.compose.material.icons.filled.ShowChart
 import androidx.compose.material.icons.filled.Shuffle
 import androidx.compose.material.icons.filled.SkipNext
 import androidx.compose.material.icons.filled.SkipPrevious
+import androidx.compose.material.icons.filled.Speed
+import androidx.compose.material.icons.filled.Storage
+import androidx.compose.material.icons.filled.SurroundSound
+import androidx.compose.material.icons.filled.TrendingUp
 import androidx.compose.material.icons.filled.WifiOff
 import androidx.compose.material.icons.outlined.AddReaction
 import androidx.compose.material.icons.outlined.Analytics
-import androidx.compose.material.icons.outlined.Bedtime
 import androidx.compose.material.icons.outlined.AudioFile
+import androidx.compose.material.icons.outlined.Bedtime
 import androidx.compose.material.icons.outlined.DataObject
 import androidx.compose.material.icons.outlined.FilterAlt
 import androidx.compose.material.icons.outlined.Report
@@ -124,28 +124,28 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.graphics.graphicsLayer
-import androidx.compose.ui.input.pointer.pointerInput
-import androidx.compose.ui.zIndex
-import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
+import androidx.compose.ui.zIndex
 import androidx.hilt.lifecycle.viewmodel.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.media3.common.Player
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
-import androidx.compose.ui.res.painterResource
-import androidx.compose.ui.unit.sp
 import tech.capullo.telecloudradio.LISTEN_IN_CHAT_ID
 import tech.capullo.telecloudradio.data.db.AudioAnalysisEntity
 import tech.capullo.telecloudradio.data.db.MediaMessageEntity
 import tech.capullo.telecloudradio.player.AudioMetadata
-import tech.capullo.telecloudradio.snapcast.SnapclientProcess
 import tech.capullo.telecloudradio.snapcast.SnapcastManager
+import tech.capullo.telecloudradio.snapcast.SnapclientProcess
 import tech.capullo.telecloudradio.snapcast.firstArtist
 import tech.capullo.telecloudradio.ui.snapcast.SnapcastControlSheet
 import tech.capullo.telecloudradio.ui.snapcast.SnapcastViewModel
@@ -378,7 +378,8 @@ private fun OfflineBanner() {
             verticalAlignment = Alignment.CenterVertically,
         ) {
             Icon(
-                Icons.Default.WifiOff, contentDescription = null,
+                Icons.Default.WifiOff,
+                contentDescription = null,
                 modifier = Modifier.size(16.dp),
                 tint = MaterialTheme.colorScheme.onSecondaryContainer,
             )
@@ -552,7 +553,8 @@ private fun ListenInPlayer(
                         detectHorizontalDragGestures(
                             onDragStart = { totalDrag = 0f },
                             onHorizontalDrag = { change, dragAmount ->
-                                change.consume(); totalDrag += dragAmount
+                                change.consume()
+                                totalDrag += dragAmount
                             },
                             onDragEnd = {
                                 val threshold = 90.dp.toPx()
@@ -714,10 +716,14 @@ private fun ControlBar(state: PlayerUiState, viewModel: PlayerViewModel) {
                 PlayOrder.SHUFFLED -> Pair(Icons.Default.Shuffle, "Shuffled")
             }
             Icon(
-                icon, contentDescription = desc,
+                icon,
+                contentDescription = desc,
                 modifier = Modifier.size(26.dp),
-                tint = if (state.playOrder != PlayOrder.NEWEST_FIRST) MaterialTheme.colorScheme.primary
-                       else MaterialTheme.colorScheme.onSurfaceVariant,
+                tint = if (state.playOrder != PlayOrder.NEWEST_FIRST) {
+                    MaterialTheme.colorScheme.primary
+                } else {
+                    MaterialTheme.colorScheme.onSurfaceVariant
+                },
             )
         }
         IconButton(
@@ -764,12 +770,18 @@ private fun ControlBar(state: PlayerUiState, viewModel: PlayerViewModel) {
         }
         IconButton(onClick = viewModel::cycleRepeatMode) {
             Icon(
-                if (state.repeatMode == Player.REPEAT_MODE_ONE) Icons.Default.RepeatOne
-                else Icons.Default.Repeat,
+                if (state.repeatMode == Player.REPEAT_MODE_ONE) {
+                    Icons.Default.RepeatOne
+                } else {
+                    Icons.Default.Repeat
+                },
                 contentDescription = "Repeat",
                 modifier = Modifier.size(26.dp),
-                tint = if (state.repeatMode == Player.REPEAT_MODE_OFF) MaterialTheme.colorScheme.onSurfaceVariant
-                       else MaterialTheme.colorScheme.primary,
+                tint = if (state.repeatMode == Player.REPEAT_MODE_OFF) {
+                    MaterialTheme.colorScheme.onSurfaceVariant
+                } else {
+                    MaterialTheme.colorScheme.primary
+                },
             )
         }
     }
@@ -860,7 +872,8 @@ private fun TrackInfo(
                 Text(it, style = MaterialTheme.typography.bodySmall)
             }
             Icon(
-                Icons.Outlined.AddReaction, contentDescription = "React",
+                Icons.Outlined.AddReaction,
+                contentDescription = "React",
                 modifier = Modifier.size(16.dp),
                 tint = MaterialTheme.colorScheme.onSurfaceVariant,
             )
@@ -883,7 +896,8 @@ private fun TrackInfo(
             }
             IconButton(onClick = onDownload, modifier = Modifier.size(20.dp)) {
                 Icon(
-                    Icons.Default.Download, contentDescription = "Download",
+                    Icons.Default.Download,
+                    contentDescription = "Download",
                     modifier = Modifier.size(16.dp),
                     tint = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
@@ -892,9 +906,9 @@ private fun TrackInfo(
         audioMeta?.let { meta ->
             val parts = listOfNotNull(
                 meta.codec,
-                meta.bitrateKbps?.let { "${it} kbps" },
+                meta.bitrateKbps?.let { "$it kbps" },
                 meta.sampleRateHz?.let { "${"%.1f".format(it / 1000f)} kHz" },
-                meta.bitDepth?.let { "${it}-bit" },
+                meta.bitDepth?.let { "$it-bit" },
             )
             if (parts.isNotEmpty()) {
                 Row(
@@ -909,7 +923,8 @@ private fun TrackInfo(
                     )
                     IconButton(onClick = onStats, modifier = Modifier.size(20.dp)) {
                         Icon(
-                            Icons.Default.Equalizer, contentDescription = "Stats for nerds",
+                            Icons.Default.Equalizer,
+                            contentDescription = "Stats for nerds",
                             modifier = Modifier.size(16.dp),
                             tint = MaterialTheme.colorScheme.outline,
                         )
@@ -954,8 +969,11 @@ private fun ReactionsSheet(
                 val isOwn = info?.ownEmoji == e
                 Surface(
                     shape = RoundedCornerShape(20.dp),
-                    color = if (isOwn) MaterialTheme.colorScheme.primaryContainer
-                            else MaterialTheme.colorScheme.surfaceContainerLow,
+                    color = if (isOwn) {
+                        MaterialTheme.colorScheme.primaryContainer
+                    } else {
+                        MaterialTheme.colorScheme.surfaceContainerLow
+                    },
                     modifier = Modifier.clip(RoundedCornerShape(20.dp))
                         .clickable(enabled = !isLoading) { onReact(e) },
                 ) {
@@ -1065,8 +1083,7 @@ private fun QueueSheet(
     }
 }
 
-private fun gbString(tracks: List<MediaMessageEntity>): String =
-    "%.1f GB".format(tracks.sumOf { it.fileSize ?: 0L } / (1024.0 * 1024.0 * 1024.0))
+private fun gbString(tracks: List<MediaMessageEntity>): String = "%.1f GB".format(tracks.sumOf { it.fileSize ?: 0L } / (1024.0 * 1024.0 * 1024.0))
 
 @Composable
 private fun QueueTab(
@@ -1127,9 +1144,13 @@ private fun QueueTab(
                 PlayOrder.SHUFFLED -> Pair(Icons.Default.Shuffle, "Shuffled")
             }
             Icon(
-                icon, contentDescription = desc,
-                tint = if (playOrder != PlayOrder.NEWEST_FIRST) MaterialTheme.colorScheme.primary
-                       else MaterialTheme.colorScheme.onSurfaceVariant,
+                icon,
+                contentDescription = desc,
+                tint = if (playOrder != PlayOrder.NEWEST_FIRST) {
+                    MaterialTheme.colorScheme.primary
+                } else {
+                    MaterialTheme.colorScheme.onSurfaceVariant
+                },
             )
         }
     }
@@ -1179,15 +1200,23 @@ private fun QueueTab(
                                 },
                             )
                         }
-                    } else null,
+                    } else {
+                        null
+                    },
                 ) { dismiss ->
                     DropdownMenuItem(
                         text = { Text("Play next") },
-                        onClick = { onQueuePlayNext(qIdx); dismiss() },
+                        onClick = {
+                            onQueuePlayNext(qIdx)
+                            dismiss()
+                        },
                     )
                     DropdownMenuItem(
                         text = { Text("Remove from queue") },
-                        onClick = { onQueueRemove(qIdx); dismiss() },
+                        onClick = {
+                            onQueueRemove(qIdx)
+                            dismiss()
+                        },
                     )
                 }
             }
@@ -1301,11 +1330,17 @@ private fun LibraryTab(
                 ) { dismiss ->
                     DropdownMenuItem(
                         text = { Text("Play next") },
-                        onClick = { onPlayNext(track); dismiss() },
+                        onClick = {
+                            onPlayNext(track)
+                            dismiss()
+                        },
                     )
                     DropdownMenuItem(
                         text = { Text("Add to queue") },
-                        onClick = { onAddToQueue(track); dismiss() },
+                        onClick = {
+                            onAddToQueue(track)
+                            dismiss()
+                        },
                     )
                 }
             }
@@ -1354,8 +1389,11 @@ private fun TrackRow(
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis,
                     style = MaterialTheme.typography.bodyMedium,
-                    color = if (isCurrent) MaterialTheme.colorScheme.primary
-                            else MaterialTheme.colorScheme.onSurface,
+                    color = if (isCurrent) {
+                        MaterialTheme.colorScheme.primary
+                    } else {
+                        MaterialTheme.colorScheme.onSurface
+                    },
                 )
             },
             supportingContent = {
@@ -1434,7 +1472,8 @@ private fun QueueFilterChip(
             trailingIcon = {
                 if (selected.isNotEmpty()) {
                     Icon(
-                        Icons.Default.Close, contentDescription = "Clear $label filter",
+                        Icons.Default.Close,
+                        contentDescription = "Clear $label filter",
                         modifier = Modifier.size(16.dp).clickable(onClick = onClear),
                     )
                 }
@@ -1487,18 +1526,40 @@ private fun StatsSheet(
                 audioMeta?.sampleRateHz?.let { StatChip(Icons.Default.GraphicEq, "Sample Rate", "${"%.1f".format(it / 1000f)} kHz") }
                 audioMeta?.bitDepth?.let { bd ->
                     StatChip(Icons.Outlined.AudioFile, "Bit Depth", "$bd-bit")
-                    StatChip(Icons.Outlined.DataObject, "Decoded", when (bd) { 16 -> "s16"; 24 -> "s24"; else -> "f32" })
+                    StatChip(
+                        Icons.Outlined.DataObject,
+                        "Decoded",
+                        when (bd) {
+                            16 -> "s16"
+                            24 -> "s24"
+                            else -> "f32"
+                        },
+                    )
                 }
                 audioMeta?.bitrateKbps?.let { StatChip(Icons.Default.Speed, "Bitrate", "$it kbps") }
                 audioMeta?.channels?.let { ch ->
-                    StatChip(Icons.Default.SurroundSound, "Channels", when (ch) { 1 -> "Mono"; 2 -> "2 (stereo)"; else -> "$ch ch" })
+                    StatChip(
+                        Icons.Default.SurroundSound,
+                        "Channels",
+                        when (ch) {
+                            1 -> "Mono"
+                            2 -> "2 (stereo)"
+                            else -> "$ch ch"
+                        },
+                    )
                 }
                 track?.duration?.takeIf { it > 0 }?.let { StatChip(Icons.Outlined.Timer, "Duration", formatDuration(it)) }
                 audioMeta?.sampleRateHz?.let { StatChip(Icons.Default.MultilineChart, "Nyquist", "${"%.1f".format(it / 2000f)} kHz") }
                 track?.fileSize?.takeIf { it > 0L }?.let { bytes ->
-                    StatChip(Icons.Default.Storage, "Size",
-                        if (bytes >= 1_000_000_000L) "${"%.1f".format(bytes / 1_000_000_000.0)} GB"
-                        else "${"%.1f".format(bytes / 1_000_000.0)} MB")
+                    StatChip(
+                        Icons.Default.Storage,
+                        "Size",
+                        if (bytes >= 1_000_000_000L) {
+                            "${"%.1f".format(bytes / 1_000_000_000.0)} GB"
+                        } else {
+                            "${"%.1f".format(bytes / 1_000_000.0)} MB"
+                        },
+                    )
                 }
             }
         }
@@ -1522,7 +1583,8 @@ private fun StatsSheet(
                 if (analysis.truePeakDb > -990f) StatChip(Icons.Outlined.Warning, "True Peak", "${"%.2f".format(analysis.truePeakDb)} dBTP")
                 StatChip(
                     if (analysis.clipping) Icons.Outlined.Report else Icons.Default.CheckCircle,
-                    "Clipping", if (analysis.clipping) "⚠ Yes" else "None",
+                    "Clipping",
+                    if (analysis.clipping) "⚠ Yes" else "None",
                 )
                 StatChip(Icons.Outlined.FilterAlt, "Cutoff", "${"%.1f".format(analysis.spectralCutoffHz / 1000f)} kHz")
                 if (analysis.totalSamples > 0L) {
@@ -1635,19 +1697,25 @@ private fun SpectrogramView(spectrogramPath: String) {
 
 // SpotiFLAC _spekColorRGB: dark→blue/purple→magenta→red→orange→yellow→white
 private val spectStopPos = floatArrayOf(0f, 0.08f, 0.18f, 0.28f, 0.40f, 0.52f, 0.65f, 0.78f, 0.90f, 1.0f)
-private val spectStopR   = intArrayOf(  0,     0,    50,   200,   255,   255,   255,   255,   255,  255)
-private val spectStopG   = intArrayOf(  0,     0,    30,     0,     0,   100,   180,   235,   255,  255)
-private val spectStopB   = intArrayOf(  0,    80,   255,   200,     0,     0,     0,    30,   130,  255)
+private val spectStopR = intArrayOf(0, 0, 50, 200, 255, 255, 255, 255, 255, 255)
+private val spectStopG = intArrayOf(0, 0, 30, 0, 0, 100, 180, 235, 255, 255)
+private val spectStopB = intArrayOf(0, 80, 255, 200, 0, 0, 0, 30, 130, 255)
 
 private fun spectrogramColorArgb(v: Float): Int {
     val vc = v.coerceIn(0f, 1f)
     var lo = spectStopPos.size - 2
     for (i in 1 until spectStopPos.size) {
-        if (spectStopPos[i] >= vc) { lo = i - 1; break }
+        if (spectStopPos[i] >= vc) {
+            lo = i - 1
+            break
+        }
     }
     val hi = lo + 1
-    val t = if (spectStopPos[hi] > spectStopPos[lo])
-        (vc - spectStopPos[lo]) / (spectStopPos[hi] - spectStopPos[lo]) else 0f
+    val t = if (spectStopPos[hi] > spectStopPos[lo]) {
+        (vc - spectStopPos[lo]) / (spectStopPos[hi] - spectStopPos[lo])
+    } else {
+        0f
+    }
     val r = (spectStopR[lo] + (spectStopR[hi] - spectStopR[lo]) * t).toInt().coerceIn(0, 255)
     val g = (spectStopG[lo] + (spectStopG[hi] - spectStopG[lo]) * t).toInt().coerceIn(0, 255)
     val b = (spectStopB[lo] + (spectStopB[hi] - spectStopB[lo]) * t).toInt().coerceIn(0, 255)
@@ -1659,7 +1727,9 @@ private fun formatTelegramDate(dateStr: String?): String? {
     return try {
         val epochSeconds = dateStr.toLong()
         SimpleDateFormat("d MMM yyyy", Locale.getDefault()).format(Date(epochSeconds * 1000))
-    } catch (_: Exception) { null }
+    } catch (_: Exception) {
+        null
+    }
 }
 
 private fun formatDuration(seconds: Int): String {

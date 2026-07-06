@@ -18,17 +18,16 @@ object DatabaseModule {
 
     @Provides
     @Singleton
-    fun provideDatabase(@ApplicationContext context: Context): MediaMessageDatabase =
-        Room.databaseBuilder(context, MediaMessageDatabase::class.java, "telecloud_radio.db")
-            .addMigrations(
-                MediaMessageDatabase.MIGRATION_1_2,
-                MediaMessageDatabase.MIGRATION_2_3,
-                MediaMessageDatabase.MIGRATION_3_4,
-                MediaMessageDatabase.MIGRATION_4_5,
-            )
-            // Wipes and recreates DB on downgrade (dev-time safety net for intermediate builds)
-            .fallbackToDestructiveMigration(dropAllTables = true)
-            .build()
+    fun provideDatabase(@ApplicationContext context: Context): MediaMessageDatabase = Room.databaseBuilder(context, MediaMessageDatabase::class.java, "telecloud_radio.db")
+        .addMigrations(
+            MediaMessageDatabase.MIGRATION_1_2,
+            MediaMessageDatabase.MIGRATION_2_3,
+            MediaMessageDatabase.MIGRATION_3_4,
+            MediaMessageDatabase.MIGRATION_4_5,
+        )
+        // Wipes and recreates DB on downgrade (dev-time safety net for intermediate builds)
+        .fallbackToDestructiveMigration(dropAllTables = true)
+        .build()
 
     @Provides
     fun provideMediaMessageDao(db: MediaMessageDatabase): MediaMessageDao = db.mediaMessageDao()

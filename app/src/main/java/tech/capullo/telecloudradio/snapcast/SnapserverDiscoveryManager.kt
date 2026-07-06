@@ -117,7 +117,16 @@ class SnapserverDiscoveryManager(context: Context) {
             val host = info.host?.hostAddress ?: return@mapNotNull null
             if (host in localIps) return@mapNotNull null // skip self
             val name = info.serviceName
-                .let { if (it.startsWith(SERVICE_NAME_PREFIX)) it.substring(SERVICE_NAME_PREFIX.length) else it }
+                .let {
+                    if (it.startsWith(
+                            SERVICE_NAME_PREFIX,
+                        )
+                    ) {
+                        it.substring(SERVICE_NAME_PREFIX.length)
+                    } else {
+                        it
+                    }
+                }
             DiscoveredSnapserver(name, info.serviceType, host, info.port)
         }
     }

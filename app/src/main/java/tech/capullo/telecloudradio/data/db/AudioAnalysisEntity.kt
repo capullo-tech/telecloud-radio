@@ -19,5 +19,5 @@ data class AudioAnalysisEntity(
     val truePeakDb: Float = -999f,
     val clipping: Boolean = false,
     val totalSamples: Long = 0L,
-    val channelStatsCsv: String? = null,  // "p1,r1,dr1;p2,r2,dr2" per channel
+    val channelStatsCsv: String? = null, // "p1,r1,dr1;p2,r2,dr2" per channel
 )

@@ -21,11 +21,11 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
-import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.withContext
 import org.json.JSONArray
 import org.json.JSONException
@@ -144,6 +144,7 @@ private class SnapcontrolSession(
     private val propsMutex = Mutex()
 
     @Volatile private var cachedArtBytes: ByteArray? = null
+
     @Volatile private var cachedArtData: JSONObject? = null
 
     suspend fun run() {
@@ -194,7 +195,11 @@ private class SnapcontrolSession(
                 // tags is effectively JPEG
                 val ext = if (bytes.size > 4 &&
                     bytes[0] == 0x89.toByte() && bytes[1] == 'P'.code.toByte()
-                ) "png" else "jpg"
+                ) {
+                    "png"
+                } else {
+                    "jpg"
+                }
                 JSONObject()
                     .put("data", Base64.encodeToString(bytes, Base64.NO_WRAP))
                     .put("extension", ext)

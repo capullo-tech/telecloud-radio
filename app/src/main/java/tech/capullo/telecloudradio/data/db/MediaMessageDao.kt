@@ -13,10 +13,14 @@ interface MediaMessageDao {
     @Query("SELECT * FROM media_messages WHERE chatId = :chatId AND station IS NOT NULL")
     suspend fun getPlaylist(chatId: Long): List<MediaMessageEntity>
 
-    @Query("SELECT * FROM media_messages WHERE chatId = :chatId AND station IS NOT NULL ORDER BY messageId DESC")
+    @Query(
+        "SELECT * FROM media_messages WHERE chatId = :chatId AND station IS NOT NULL ORDER BY messageId DESC",
+    )
     suspend fun getPlaylistNewestFirst(chatId: Long): List<MediaMessageEntity>
 
-    @Query("SELECT * FROM media_messages WHERE chatId = :chatId AND station IS NOT NULL AND localPath IS NOT NULL ORDER BY messageId DESC")
+    @Query(
+        "SELECT * FROM media_messages WHERE chatId = :chatId AND station IS NOT NULL AND localPath IS NOT NULL ORDER BY messageId DESC",
+    )
     suspend fun getLocalTracks(chatId: Long): List<MediaMessageEntity>
 
     @Query("SELECT MAX(messageId) FROM media_messages WHERE chatId = :chatId")
@@ -31,7 +35,9 @@ interface MediaMessageDao {
     @Query("SELECT COUNT(*) FROM media_messages WHERE chatId = :chatId AND station IS NOT NULL")
     suspend fun getTrackCount(chatId: Long): Int
 
-    @Query("SELECT SUM(fileSize) FROM media_messages WHERE chatId = :chatId AND station IS NOT NULL")
+    @Query(
+        "SELECT SUM(fileSize) FROM media_messages WHERE chatId = :chatId AND station IS NOT NULL",
+    )
     suspend fun getTotalSize(chatId: Long): Long?
 
     @Query("SELECT localPath FROM media_messages WHERE messageId = :messageId")
@@ -55,7 +61,9 @@ interface MediaMessageDao {
     @Query("DELETE FROM media_messages")
     suspend fun deleteAll()
 
-    @Query("SELECT DISTINCT chatId, station FROM media_messages WHERE station IS NOT NULL ORDER BY station")
+    @Query(
+        "SELECT DISTINCT chatId, station FROM media_messages WHERE station IS NOT NULL ORDER BY station",
+    )
     suspend fun getStations(): List<StationInfo>
 
     @Query("SELECT localPath FROM media_messages WHERE chatId = :chatId AND localPath IS NOT NULL")
@@ -68,7 +76,4 @@ interface MediaMessageDao {
     suspend fun deleteByChat(chatId: Long)
 }
 
-data class StationInfo(
-    val chatId: Long,
-    val station: String,
-)
+data class StationInfo(val chatId: Long, val station: String)

@@ -200,7 +200,9 @@ class SnapcastManager @Inject constructor(
                         clients = group.clients.map { client ->
                             if (client.id == clientId) {
                                 client.copy(config = client.config.copy(volume = Volume(muted, percent)))
-                            } else client
+                            } else {
+                                client
+                            }
                         },
                     )
                 },
@@ -232,7 +234,11 @@ class SnapcastManager @Inject constructor(
     }
 
     private fun renameClientWithChannel(clientId: String, channel: String) {
-        val tag = when (channel) { "left" -> "[L]"; "right" -> "[R]"; else -> "[S]" }
+        val tag = when (channel) {
+            "left" -> "[L]"
+            "right" -> "[R]"
+            else -> "[S]"
+        }
         val client = _state.value.groups.flatMap { it.clients }
             .find { it.id == clientId || it.id.contains(clientId) || clientId.contains(it.id) }
         val base = client?.config?.name?.replace(Regex("\\s*\\[[LRS]]$"), "")?.trim()
@@ -248,7 +254,9 @@ class SnapcastManager @Inject constructor(
                         clients = group.clients.map { c ->
                             if (c.id == clientId || c.id.contains(clientId) || clientId.contains(c.id)) {
                                 c.copy(config = c.config.copy(name = newName))
-                            } else c
+                            } else {
+                                c
+                            }
                         },
                     )
                 },
@@ -313,7 +321,9 @@ class SnapcastManager @Inject constructor(
                                         clients = group.clients.map { client ->
                                             if (client.id == notif.params.clientId) {
                                                 client.copy(config = client.config.copy(volume = notif.params.volume))
-                                            } else client
+                                            } else {
+                                                client
+                                            }
                                         },
                                     )
                                 },
@@ -328,7 +338,9 @@ class SnapcastManager @Inject constructor(
                                         clients = group.clients.map { client ->
                                             if (client.id == notif.params.clientId) {
                                                 client.copy(config = client.config.copy(latency = notif.params.latency))
-                                            } else client
+                                            } else {
+                                                client
+                                            }
                                         },
                                     )
                                 },
@@ -408,7 +420,11 @@ class SnapcastManager @Inject constructor(
             .find { it.id == localId || it.id.contains(localId) } ?: return
         localChannelTagSet = true
         if (Regex("\\s*\\[[LRS]]$").containsMatchIn(client.config.name)) return // already tagged
-        val tag = when (_state.value.snapclientChannel) { "left" -> "[L]"; "right" -> "[R]"; else -> "[S]" }
+        val tag = when (_state.value.snapclientChannel) {
+            "left" -> "[L]"
+            "right" -> "[R]"
+            else -> "[S]"
+        }
         val base = client.config.name.ifBlank { client.host.name.ifBlank { client.host.ip } }
         scope.launch {
             controlClient?.sendSetClientName(client.id, "$base $tag")
@@ -423,7 +439,11 @@ class SnapcastManager @Inject constructor(
         val client = groups.flatMap { it.clients }
             .find { it.id == localId || it.id.contains(localId) } ?: return
         val tag = Regex("\\s*\\[([LRS])]$").find(client.config.name)?.groupValues?.get(1) ?: return
-        val newChannel = when (tag) { "L" -> "left"; "R" -> "right"; else -> "stereo" }
+        val newChannel = when (tag) {
+            "L" -> "left"
+            "R" -> "right"
+            else -> "stereo"
+        }
         if (newChannel != _state.value.snapclientChannel) {
             _state.update { it.copy(snapclientChannel = newChannel) }
             snapclientProcess?.setChannel(newChannel)

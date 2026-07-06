@@ -19,20 +19,16 @@ class SnapcastViewModel @Inject constructor(
     fun startDiscovery() = snapcastManager.discovery.startDiscovery()
     fun stopDiscovery() = snapcastManager.discovery.stopDiscovery()
 
-    fun connect(host: String, port: Int = tech.capullo.telecloudradio.snapcast.SnapcastPorts.STREAM) =
-        snapcastManager.connectListen(host, port)
+    fun connect(host: String, port: Int = tech.capullo.telecloudradio.snapcast.SnapcastPorts.STREAM) = snapcastManager.connectListen(host, port)
     fun disconnect() = snapcastManager.disconnectListen()
 
-    fun setClientVolume(clientId: String, percent: Int, muted: Boolean) =
-        snapcastManager.adjustClientVolume(clientId, percent, muted)
+    fun setClientVolume(clientId: String, percent: Int, muted: Boolean) = snapcastManager.adjustClientVolume(clientId, percent, muted)
 
-    fun setClientLatency(clientId: String, latencyMs: Int) =
-        snapcastManager.adjustClientLatency(clientId, latencyMs)
+    fun setClientLatency(clientId: String, latencyMs: Int) = snapcastManager.adjustClientLatency(clientId, latencyMs)
 
     fun setLocalChannel(channel: String) = snapcastManager.setLocalChannel(channel)
 
-    fun changeClientChannel(clientId: String, channel: String) =
-        snapcastManager.changeClientChannel(clientId, channel)
+    fun changeClientChannel(clientId: String, channel: String) = snapcastManager.changeClientChannel(clientId, channel)
 
     fun toggleStreamLock() = snapcastManager.toggleStreamLock()
 

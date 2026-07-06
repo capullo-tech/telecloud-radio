@@ -20,16 +20,13 @@ import javax.inject.Singleton
  * track file.
  */
 @Singleton
-class AlbumArtFetcher @Inject constructor(
-    @ApplicationContext private val context: Context,
-) {
+class AlbumArtFetcher @Inject constructor(@ApplicationContext private val context: Context) {
     private val cacheDir: File get() = File(context.filesDir, "artcache")
 
     private fun artFile(messageId: Long) = File(cacheDir, "art_$messageId.jpg")
     private fun noneMarker(messageId: Long) = File(cacheDir, "art_$messageId.none")
 
-    fun cached(messageId: Long): ByteArray? =
-        artFile(messageId).takeIf { it.exists() }?.readBytes()
+    fun cached(messageId: Long): ByteArray? = artFile(messageId).takeIf { it.exists() }?.readBytes()
 
     fun evict(messageId: Long) {
         artFile(messageId).delete()
@@ -63,7 +60,9 @@ class AlbumArtFetcher @Inject constructor(
             .trim()
         val attempts = if (stripped.isNotBlank() && stripped != primary) {
             listOf(primary, stripped)
-        } else listOf(primary)
+        } else {
+            listOf(primary)
+        }
 
         // Only write the negative-cache marker when a source definitively answered
         // "no results" — a network failure must stay retryable
@@ -75,7 +74,10 @@ class AlbumArtFetcher @Inject constructor(
                     if (bytes != null) {
                         cacheDir.mkdirs()
                         artFile(messageId).writeBytes(bytes)
-                        Log.d("TeleCloud", "art fetched for $messageId (${bytes.size} bytes, q=\"$text\")")
+                        Log.d(
+                            "TeleCloud",
+                            "art fetched for $messageId (${bytes.size} bytes, q=\"$text\")",
+                        )
                         return@withContext bytes
                     }
                     definitiveMiss = true
@@ -131,7 +133,9 @@ class AlbumArtFetcher @Inject constructor(
                 youtubeIdRegex.matches(last)
             ) {
                 parts.removeAt(parts.size - 1)
-            } else break
+            } else {
+                break
+            }
         }
         var base = parts.joinToString(".").replace('_', ' ').trim()
         base = base.replace(Regex("^\\d{1,3}[\\s.\\-]+"), "").trim() // leading track number
@@ -144,7 +148,10 @@ class AlbumArtFetcher @Inject constructor(
 
     private fun fetchITunes(text: String): ByteArray? {
         val json = httpGetString(
-            "https://itunes.apple.com/search?media=music&limit=1&term=${URLEncoder.encode(text, "UTF-8")}",
+            "https://itunes.apple.com/search?media=music&limit=1&term=${URLEncoder.encode(
+                text,
+                "UTF-8",
+            )}",
         )
         val root = JSONObject(json)
         if (root.optInt("resultCount") == 0) return null
@@ -167,8 +174,7 @@ class AlbumArtFetcher @Inject constructor(
 
     // ---- http (throws on any failure — callers decide retryability) ----
 
-    private fun httpGetString(url: String): String =
-        httpGetBytes(url).toString(Charsets.UTF_8)
+    private fun httpGetString(url: String): String = httpGetBytes(url).toString(Charsets.UTF_8)
 
     private fun httpGetBytes(url: String): ByteArray {
         val connection = URL(url).openConnection() as HttpURLConnection

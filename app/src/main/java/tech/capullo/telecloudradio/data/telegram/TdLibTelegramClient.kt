@@ -51,7 +51,7 @@ class TdLibTelegramClient @Inject constructor(
 
     // senderId → username ("@name") or null when the user has none; avoids repeated GetUser calls
     private val usernameCache = ConcurrentHashMap<Long, String>()
-    private val NO_USERNAME = ""
+    private val noUsername = ""
 
     private val audioExtensions = setOf(
         "mp3", "m4a", "flac", "ogg", "opus", "wav", "aac", "wma", "aiff", "aif", "alac", "ape",
@@ -136,9 +136,8 @@ class TdLibTelegramClient @Inject constructor(
         send<TdApi.Ok>(TdApi.CheckAuthenticationPassword(password))
     }
 
-    override suspend fun getMessageReactions(chatId: Long, messageId: Long): String? =
-        runCatching { send<TdApi.Message>(TdApi.GetMessage(chatId, messageId)).extractReactions() }
-            .getOrNull()
+    override suspend fun getMessageReactions(chatId: Long, messageId: Long): String? = runCatching { send<TdApi.Message>(TdApi.GetMessage(chatId, messageId)).extractReactions() }
+        .getOrNull()
 
     override suspend fun getChats(limit: Int): List<TelegramChat> {
         val chats = send<TdApi.Chats>(TdApi.GetChats(TdApi.ChatListMain(), limit))
@@ -233,7 +232,9 @@ class TdLibTelegramClient @Inject constructor(
                     ReactorEntry(emoji, senderName(added.senderId), added.isOutgoing)
                 }
             }.getOrDefault(emptyList())
-        } else emptyList()
+        } else {
+            emptyList()
+        }
 
         return MessageReactionsInfo(
             summary = summary,
@@ -264,11 +265,11 @@ class TdLibTelegramClient @Inject constructor(
     }
 
     private suspend fun resolveUsername(userId: Long): String? {
-        usernameCache[userId]?.let { return it.takeIf { u -> u != NO_USERNAME } }
+        usernameCache[userId]?.let { return it.takeIf { u -> u != noUsername } }
         val username = runCatching {
             send<TdApi.User>(TdApi.GetUser(userId)).usernames?.activeUsernames?.firstOrNull()
         }.getOrNull()
-        usernameCache[userId] = username ?: NO_USERNAME
+        usernameCache[userId] = username ?: noUsername
         return username
     }
 
@@ -277,16 +278,15 @@ class TdLibTelegramClient @Inject constructor(
     }
 
     @Suppress("UNCHECKED_CAST")
-    private suspend fun <T : TdApi.Object> send(function: TdApi.Function<out TdApi.Object>): T =
-        suspendCancellableCoroutine { cont ->
-            client.send(function) { result ->
-                if (result is TdApi.Error) {
-                    cont.resumeWithException(TelegramException(result.code, result.message))
-                } else {
-                    cont.resume(result as T)
-                }
+    private suspend fun <T : TdApi.Object> send(function: TdApi.Function<out TdApi.Object>): T = suspendCancellableCoroutine { cont ->
+        client.send(function) { result ->
+            if (result is TdApi.Error) {
+                cont.resumeWithException(TelegramException(result.code, result.message))
+            } else {
+                cont.resume(result as T)
             }
         }
+    }
 
     private fun TdApi.Chat.toTelegramChat() = TelegramChat(
         id = id,
