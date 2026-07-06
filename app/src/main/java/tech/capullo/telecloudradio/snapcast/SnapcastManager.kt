@@ -15,6 +15,7 @@ import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import tech.capullo.audio.contracts.NowPlaying
 import tech.capullo.audio.contracts.PlaybackController
+import tech.capullo.audio.player.AudioFocusController
 import tech.capullo.audio.snapcast.ClientOnConnect
 import tech.capullo.audio.snapcast.ClientOnDisconnect
 import tech.capullo.audio.snapcast.ClientOnLatencyChanged
@@ -102,6 +103,13 @@ class SnapcastManager @Inject constructor(
     private var controlClient: SnapcastControlClient? = null
     private var controlJob: Job? = null
     private var localChannelTagSet = false
+
+    // Audio focus governs THIS device's audible snapclient (not the broadcast): the snapserver keeps
+    // streaming to web/LAN clients regardless, but the local snapclient is paused when another app
+    // takes focus and restarted when focus returns — so two capullo apps don't mix their speaker.
+    private var currentSnapclientHost: String? = null
+    private var currentSnapclientPort: Int = 0
+    private var audioFocus: AudioFocusController? = null
 
     /**
      * (Re)creates the snapserver process + FIFO. Called by PlaybackService in
@@ -314,8 +322,40 @@ class SnapcastManager @Inject constructor(
     // --- Internals ---
 
     private fun startLocalSnapclient(host: String, port: Int) {
-        stopLocalSnapclient()
+        destroySnapclientProcess()
+        currentSnapclientHost = host
+        currentSnapclientPort = port
         localChannelTagSet = false
+        launchSnapclientProcess(host, port)
+        // Request audio focus so the foreground app owns the speaker. On loss the local snapclient is
+        // stopped (broadcast continues); on regain it's restarted with the same host/port.
+        val focus = audioFocus ?: AudioFocusController(
+            context,
+            onPause = { scope.launch { destroySnapclientProcess() } },
+            onResume = {
+                scope.launch {
+                    val h = currentSnapclientHost
+                    if (h != null && snapclientProcess == null) launchSnapclientProcess(h, currentSnapclientPort)
+                }
+            },
+        ).also { audioFocus = it }
+        focus.request()
+    }
+
+    /**
+     * Re-assert audio focus for the local snapclient — call when the app returns to the foreground so
+     * the focused app reclaims the speaker (another app may hold focus without having cleanly
+     * abandoned it). No-op unless a broadcast / listen-in session is active; restarts the snapclient
+     * if focus is (re)granted and it was paused.
+     */
+    fun refocusLocalAudio() {
+        val host = currentSnapclientHost ?: return
+        if (audioFocus?.request() == true && snapclientProcess == null) {
+            launchSnapclientProcess(host, currentSnapclientPort)
+        }
+    }
+
+    private fun launchSnapclientProcess(host: String, port: Int) {
         val channel = _state.value.snapclientChannel
         val sc = SnapclientProcess(context).also { snapclientProcess = it }
         snapclientStateJob = scope.launch {
@@ -324,13 +364,19 @@ class SnapcastManager @Inject constructor(
         snapclientJob = scope.launch { sc.start(host, port, channel) }
     }
 
-    private fun stopLocalSnapclient() {
+    private fun destroySnapclientProcess() {
         snapclientStateJob?.cancel()
         snapclientStateJob = null
         snapclientJob?.cancel()
         snapclientJob = null
         snapclientProcess?.destroy()
         snapclientProcess = null
+    }
+
+    private fun stopLocalSnapclient() {
+        destroySnapclientProcess()
+        currentSnapclientHost = null
+        audioFocus?.abandon()
     }
 
     private fun startControl(host: String) {

@@ -10,6 +10,7 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import dagger.hilt.android.AndroidEntryPoint
 import tech.capullo.telecloudradio.data.SettingsRepository
 import tech.capullo.telecloudradio.data.ThemeMode
+import tech.capullo.telecloudradio.snapcast.SnapcastManager
 import tech.capullo.telecloudradio.ui.theme.TelecloudRadioTheme
 import javax.inject.Inject
 
@@ -17,6 +18,15 @@ import javax.inject.Inject
 class MainActivity : ComponentActivity() {
 
     @Inject lateinit var settings: SettingsRepository
+
+    @Inject lateinit var snapcastManager: SnapcastManager
+
+    // Returning to the foreground reclaims audio focus so this app owns the speaker while it broadcasts
+    // (the local snapclient resumes; the broadcast never stopped).
+    override fun onResume() {
+        super.onResume()
+        snapcastManager.refocusLocalAudio()
+    }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
