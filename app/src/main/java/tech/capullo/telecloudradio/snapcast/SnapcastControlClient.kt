@@ -1,0 +1,142 @@
+package tech.capullo.telecloudradio.snapcast
+
+import android.util.Log
+import io.ktor.client.HttpClient
+import io.ktor.client.engine.okhttp.OkHttp
+import io.ktor.client.plugins.websocket.DefaultClientWebSocketSession
+import io.ktor.client.plugins.websocket.WebSockets
+import io.ktor.client.plugins.websocket.sendSerialized
+import io.ktor.client.plugins.websocket.webSocketSession
+import io.ktor.http.HttpMethod
+import io.ktor.serialization.kotlinx.KotlinxWebsocketSerializationConverter
+import io.ktor.websocket.Frame
+import io.ktor.websocket.readText
+import kotlinx.coroutines.CoroutineDispatcher
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.flow
+import kotlinx.coroutines.withContext
+import kotlinx.serialization.json.Json
+import java.util.concurrent.TimeUnit
+
+// Snapserver includes unknown stream query keys (e.g. controlscript) in GetStatus responses.
+// ignoreUnknownKeys prevents SerializationException → decode failure → empty client list.
+private val snapJson = Json { ignoreUnknownKeys = true }
+
+/** WebSocket JSON-RPC control connection to a snapserver (`ws://host:HTTP/jsonrpc`). */
+class SnapcastControlClient(
+    private val snapserverHostAddress: String,
+    private val websocketPort: Int = SnapcastPorts.HTTP,
+    private val ioDispatcher: CoroutineDispatcher = Dispatchers.IO,
+) {
+    val client = HttpClient(OkHttp) {
+        engine {
+            config { pingInterval(20, TimeUnit.SECONDS) }
+        }
+        install(WebSockets) {
+            contentConverter = KotlinxWebsocketSerializationConverter(Json)
+        }
+    }
+
+    private var session: DefaultClientWebSocketSession? = null
+    private var requestIdCounter: Int = 1
+
+    suspend fun initialize() = withContext(ioDispatcher) {
+        while (true) {
+            Log.d(TAG, "Connecting to $snapserverHostAddress")
+            try {
+                session = client.webSocketSession(
+                    method = HttpMethod.Get,
+                    host = snapserverHostAddress,
+                    port = websocketPort,
+                    path = "/jsonrpc",
+                )
+                sendGetStatus()
+                break
+            } catch (e: Exception) {
+                Log.d(TAG, "WebSocket connection failed: $e")
+                delay(1000)
+            }
+        }
+    }
+
+    val notifications: Flow<SnapcastJSONRPCResponse?> = flow {
+        while (true) {
+            val frame = withContext(ioDispatcher) {
+                try {
+                    return@withContext session?.incoming?.receive() as? Frame.Text
+                } catch (e: Exception) {
+                    Log.d(TAG, "Frame read error: $e")
+                    delay(1000)
+                    if (e is java.io.EOFException) initialize()
+                }
+                return@withContext null
+            }
+            frame?.readText()?.also { json ->
+                val response = try {
+                    snapJson.decodeFromString(SnapcastJSONRPCResponseSerializer, json)
+                } catch (e: Exception) {
+                    Log.d(TAG, "Decode error: $e")
+                    null
+                }
+                emit(response)
+            } ?: run {
+                delay(1000)
+            }
+        }
+    }
+
+    suspend fun sendGetStatus() {
+        session?.sendSerialized(ServerGetStatusRequest(id = requestIdCounter++))
+    }
+
+    suspend fun sendSetVolume(clientId: String, muted: Boolean, percent: Int) {
+        session?.sendSerialized(
+            ClientSetVolumeRequest(
+                id = requestIdCounter++,
+                params = VolumeParams(clientId, Volume(muted, percent)),
+            ),
+        )
+    }
+
+    suspend fun sendGroupSetClients(groupId: String, clientIds: List<String>) {
+        session?.sendSerialized(
+            GroupSetClientsRequest(
+                id = requestIdCounter++,
+                params = GroupClientsParams(groupId, clientIds),
+            ),
+        )
+    }
+
+    suspend fun sendSetClientName(clientId: String, name: String) {
+        session?.sendSerialized(
+            ClientSetNameRequest(
+                id = requestIdCounter++,
+                params = ClientNameParams(clientId, name),
+            ),
+        )
+    }
+
+    suspend fun sendSetLatency(clientId: String, latencyMs: Int) {
+        session?.sendSerialized(
+            ClientSetLatencyRequest(
+                id = requestIdCounter++,
+                params = LatencyParams(clientId, latencyMs),
+            ),
+        )
+    }
+
+    suspend fun sendStreamControl(streamId: String, command: String) {
+        session?.sendSerialized(
+            StreamControlRequest(
+                id = requestIdCounter++,
+                params = StreamControlParams(id = streamId, command = command),
+            ),
+        )
+    }
+
+    companion object {
+        private val TAG = SnapcastControlClient::class.simpleName
+    }
+}
