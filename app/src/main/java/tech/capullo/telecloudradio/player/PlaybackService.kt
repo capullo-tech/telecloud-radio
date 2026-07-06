@@ -151,7 +151,10 @@ class PlaybackService : MediaSessionService() {
 
         // FIFO + snapserver process wrapper must exist before the sink opens the pipe
         val fifoPath = snapcastManager.prepareBroadcast()
-        val sink = FifoAudioBufferSink(fifoPath).also {
+        // enableKeepAlive = false: this sink is fed in bursts (ChannelMixing/Sonic/balance processors
+        // + local-file decode paced by AudioTrack backpressure), so the silence keep-alive would
+        // trip during normal drain waits and overfeed the FIFO -> stutter. Feed from real PCM only.
+        val sink = FifoAudioBufferSink(fifoPath, enableKeepAlive = false).also {
             fifoSink = it
             it.open()
         }
