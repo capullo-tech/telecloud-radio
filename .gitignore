@@ -1,0 +1,22 @@
+*.iml
+.gradle
+/local.properties
+/.idea
+.DS_Store
+/build
+/captures
+.externalNativeBuild
+.cxx
+local.properties
+.kotlin
+
+# TDLib prebuilt sources (entire dir populated by scripts/setup_tdlib.sh)
+tdlib/src/
+
+# APK / module build outputs
+app/build/
+tdlib/build/
+
+# Windows build-host helpers (gitignored, live only on the share)
+run-*.cmd
+build-share.log
