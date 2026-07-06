@@ -89,7 +89,9 @@ fun AppNavHost(appViewModel: AppViewModel = hiltViewModel()) {
                         val dest = appViewModel.getAutoOpenDestination()
                         if (dest != null) {
                             // addAll is atomic: NavDisplay renders one transition, not two
-                            backStack.addAll(listOf(GroupSelectorRoute, PlayerRoute(dest.first, dest.second)))
+                            backStack.addAll(
+                                listOf(GroupSelectorRoute, PlayerRoute(dest.first, dest.second)),
+                            )
                         } else {
                             backStack.add(GroupSelectorRoute)
                         }
@@ -201,16 +203,22 @@ private fun MiniPlayer(
                     ),
                 )
             }
-            IconButton(onClick = { onPrev(); }) {
+            IconButton(onClick = {
+                onPrev()
+            }) {
                 Icon(Icons.Default.SkipPrevious, contentDescription = "Previous")
             }
-            IconButton(onClick = { onPlayPause(); }) {
+            IconButton(onClick = {
+                onPlayPause()
+            }) {
                 Icon(
                     if (playback.isPlaying) Icons.Default.Pause else Icons.Default.PlayArrow,
                     contentDescription = if (playback.isPlaying) "Pause" else "Play",
                 )
             }
-            IconButton(onClick = { onNext(); }) {
+            IconButton(onClick = {
+                onNext()
+            }) {
                 Icon(Icons.Default.SkipNext, contentDescription = "Next")
             }
         }

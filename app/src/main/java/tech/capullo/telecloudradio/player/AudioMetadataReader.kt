@@ -67,12 +67,28 @@ class AudioMetadataReader @Inject constructor() {
                 if (bitrateKbps == null) bitrateKbps = it
             }
             audioFile.tag?.let { tag ->
-                tag.getFirst(org.jaudiotagger.tag.FieldKey.TITLE)?.takeIf { it.isNotBlank() }?.let { tagTitle = it }
-                tag.getFirst(org.jaudiotagger.tag.FieldKey.ARTIST)?.takeIf { it.isNotBlank() }?.let { tagArtist = it }
+                tag.getFirst(org.jaudiotagger.tag.FieldKey.TITLE)?.takeIf { it.isNotBlank() }?.let {
+                    tagTitle =
+                        it
+                }
+                tag.getFirst(org.jaudiotagger.tag.FieldKey.ARTIST)?.takeIf {
+                    it.isNotBlank()
+                }?.let {
+                    tagArtist =
+                        it
+                }
             }
         }
 
-        return AudioMetadata(codec, bitrateKbps, sampleRateHz, bitDepth, channels, tagTitle, tagArtist)
+        return AudioMetadata(
+            codec,
+            bitrateKbps,
+            sampleRateHz,
+            bitDepth,
+            channels,
+            tagTitle,
+            tagArtist,
+        )
     }
 
     private data class ExtractorResult(
@@ -90,8 +106,18 @@ class AudioMetadataReader @Inject constructor() {
                 val fmt = extractor.getTrackFormat(i)
                 val mime = fmt.getString(MediaFormat.KEY_MIME) ?: continue
                 if (mime.startsWith("audio/")) {
-                    val sr = runCatching { fmt.getInteger(MediaFormat.KEY_SAMPLE_RATE) }.getOrNull()?.takeIf { it > 0 }
-                    val ch = runCatching { fmt.getInteger(MediaFormat.KEY_CHANNEL_COUNT) }.getOrNull()?.takeIf { it > 0 }
+                    val sr = runCatching {
+                        fmt.getInteger(MediaFormat.KEY_SAMPLE_RATE)
+                    }.getOrNull()?.takeIf {
+                        it >
+                            0
+                    }
+                    val ch = runCatching {
+                        fmt.getInteger(MediaFormat.KEY_CHANNEL_COUNT)
+                    }.getOrNull()?.takeIf {
+                        it >
+                            0
+                    }
                     val br = runCatching { fmt.getInteger(MediaFormat.KEY_BIT_RATE) }.getOrNull()
                         ?.let { it / 1000 }?.takeIf { it > 0 }
                     extractor.release()

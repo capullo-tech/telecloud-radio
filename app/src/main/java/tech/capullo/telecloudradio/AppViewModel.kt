@@ -58,8 +58,12 @@ class AppViewModel @Inject constructor(
         controller?.let { if (it.isPlaying) it.pause() else it.play() }
     }
 
-    fun next() { activeTrackRepository.emitCommand(PlaybackCommand.NEXT) }
-    fun prev() { activeTrackRepository.emitCommand(PlaybackCommand.PREV) }
+    fun next() {
+        activeTrackRepository.emitCommand(PlaybackCommand.NEXT)
+    }
+    fun prev() {
+        activeTrackRepository.emitCommand(PlaybackCommand.PREV)
+    }
 
     override fun onCleared() {
         controller?.release()

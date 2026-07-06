@@ -11,23 +11,27 @@ import javax.inject.Singleton
 enum class ThemeMode { SYSTEM, DARK, LIGHT }
 
 @Singleton
-class SettingsRepository @Inject constructor(
-    @ApplicationContext context: Context,
-) {
+class SettingsRepository @Inject constructor(@ApplicationContext context: Context) {
     private val prefs = context.getSharedPreferences("settings_prefs", Context.MODE_PRIVATE)
 
     var bufferSizeGb: Float
         get() = prefs.getFloat("buffer_size_gb", 1.0f)
-        set(value) { prefs.edit().putFloat("buffer_size_gb", value).apply() }
+        set(value) {
+            prefs.edit().putFloat("buffer_size_gb", value).apply()
+        }
 
     var rememberLastGroup: Boolean
         get() = prefs.getBoolean("remember_last_group", false)
-        set(value) { prefs.edit().putBoolean("remember_last_group", value).apply() }
+        set(value) {
+            prefs.edit().putBoolean("remember_last_group", value).apply()
+        }
 
     // Sleep timer duration in minutes; the timer itself lives in PlayerViewModel
     var sleepTimerMinutes: Int
         get() = prefs.getInt("sleep_timer_minutes", 30)
-        set(value) { prefs.edit().putInt("sleep_timer_minutes", value).apply() }
+        set(value) {
+            prefs.edit().putInt("sleep_timer_minutes", value).apply()
+        }
 
     // Web player config (served as webcfg.json next to the web player) - flows
     // so PlaybackService can rewrite the file live when they change.
@@ -49,11 +53,15 @@ class SettingsRepository @Inject constructor(
 
     var lastGroupId: Long
         get() = prefs.getLong("last_group_id", -1L)
-        set(value) { prefs.edit().putLong("last_group_id", value).apply() }
+        set(value) {
+            prefs.edit().putLong("last_group_id", value).apply()
+        }
 
     var lastGroupTitle: String
         get() = prefs.getString("last_group_title", "") ?: ""
-        set(value) { prefs.edit().putString("last_group_title", value).apply() }
+        set(value) {
+            prefs.edit().putString("last_group_title", value).apply()
+        }
 
     // Theme as a flow so MainActivity recomposes immediately when it changes
     private val _themeMode = MutableStateFlow(

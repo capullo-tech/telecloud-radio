@@ -4,15 +4,15 @@ import androidx.compose.animation.core.animateDpAsState
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.ExperimentalFoundationApi
+import androidx.compose.foundation.background
 import androidx.compose.foundation.basicMarquee
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.detectDragGesturesAfterLongPress
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.grid.GridCells
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
 import androidx.compose.foundation.lazy.grid.items
-import androidx.compose.foundation.background
-import androidx.compose.foundation.clickable
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
@@ -34,10 +34,10 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
-import tech.capullo.telecloudradio.snapcast.Group
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
+import tech.capullo.telecloudradio.snapcast.Group
 import kotlin.math.PI
 import kotlin.math.abs
 import kotlin.math.cos
@@ -230,7 +230,8 @@ fun SnapcastControlSheet(
                             else -> startVol + (1f - startVol) * ((finalVol - startGroup) / (1f - startGroup))
                         }
                         onClientVolumeChange(
-                            client.id, client.config.volume.muted,
+                            client.id,
+                            client.config.volume.muted,
                             round(newVol.coerceIn(0f, 1f) * 100f).toInt(),
                         )
                     }
@@ -335,7 +336,9 @@ fun SnapcastControlSheet(
                         onChannelCycle = if (channelTag != null) {
                             {
                                 val nextChannel = when (channelTag) {
-                                    "S" -> "left"; "L" -> "right"; else -> "stereo"
+                                    "S" -> "left"
+                                    "L" -> "right"
+                                    else -> "stereo"
                                 }
                                 onChangeClientChannel(client.id, nextChannel)
                             }
@@ -402,11 +405,20 @@ private fun ClientCard(
                             mode = knobMode,
                             onModeToggle = { knobMode = if (knobMode == KnobMode.LATENCY) KnobMode.VOLUME else KnobMode.LATENCY },
                             latency = latencyState,
-                            onLatencyChange = { v -> latencyState = v; onLatencyChange(v) },
+                            onLatencyChange = { v ->
+                                latencyState = v
+                                onLatencyChange(v)
+                            },
                             volume = round(volumeState * 100f).toInt(),
-                            onVolumeChange = { v -> volumeState = v / 100f; onVolumeChange(v) },
+                            onVolumeChange = { v ->
+                                volumeState = v / 100f
+                                onVolumeChange(v)
+                            },
                             muted = mutedState,
-                            onMutedToggle = { mutedState = !mutedState; onMutedToggle(mutedState) },
+                            onMutedToggle = {
+                                mutedState = !mutedState
+                                onMutedToggle(mutedState)
+                            },
                             baseSize = knobBaseSize,
                             isSnapclient = isSnapclient,
                         )
@@ -516,10 +528,13 @@ private fun ClientKnob(
                 detectTapGestures(
                     onTap = { onModeToggle() },
                     onDoubleTap = {
-                        isActive = false; prevSmoothedDelta = 0f; accDelta = 0f
+                        isActive = false
+                        prevSmoothedDelta = 0f
+                        accDelta = 0f
                         when (mode) {
                             KnobMode.LATENCY -> if (displayLatency != 0) {
-                                displayLatency = 0; onLatencyChange(0)
+                                displayLatency = 0
+                                onLatencyChange(0)
                             }
                             KnobMode.VOLUME -> onMutedToggle()
                         }
@@ -528,14 +543,31 @@ private fun ClientKnob(
             }
             .pointerInput(mode) {
                 detectDragGesturesAfterLongPress(
-                    onDragStart = { isActive = true; prevSmoothedDelta = 0f; accDelta = 0f },
-                    onDragEnd = { isActive = false; prevSmoothedDelta = 0f; accDelta = 0f },
-                    onDragCancel = { isActive = false; prevSmoothedDelta = 0f; accDelta = 0f },
+                    onDragStart = {
+                        isActive = true
+                        prevSmoothedDelta = 0f
+                        accDelta = 0f
+                    },
+                    onDragEnd = {
+                        isActive = false
+                        prevSmoothedDelta = 0f
+                        accDelta = 0f
+                    },
+                    onDragCancel = {
+                        isActive = false
+                        prevSmoothedDelta = 0f
+                        accDelta = 0f
+                    },
                     onDrag = { change, dragAmount ->
                         change.consume()
                         val delta = computeAngularDelta(
-                            center, change.position, dragAmount,
-                            knobRadiusPx, minActiveRadiusRatio, tinyMotionDeadzoneDeg, maxEventDeltaDeg,
+                            center,
+                            change.position,
+                            dragAmount,
+                            knobRadiusPx,
+                            minActiveRadiusRatio,
+                            tinyMotionDeadzoneDeg,
+                            maxEventDeltaDeg,
                         )
                         val smoothed = prevSmoothedDelta * smoothingPrevWeight + delta * smoothingCurrentWeight
                         prevSmoothedDelta = smoothed
@@ -543,10 +575,14 @@ private fun ClientKnob(
                         while (accDelta >= degreesPerStep) {
                             when (mode) {
                                 KnobMode.LATENCY -> if (displayLatency < maxLatency) {
-                                    val v = (displayLatency + 1).coerceAtMost(maxLatency); displayLatency = v; onLatencyChange(v)
+                                    val v = (displayLatency + 1).coerceAtMost(maxLatency)
+                                    displayLatency = v
+                                    onLatencyChange(v)
                                 }
                                 KnobMode.VOLUME -> if (displayVolume < 100) {
-                                    val v = (displayVolume + 1).coerceAtMost(100); displayVolume = v; onVolumeChange(v)
+                                    val v = (displayVolume + 1).coerceAtMost(100)
+                                    displayVolume = v
+                                    onVolumeChange(v)
                                 }
                             }
                             accDelta -= degreesPerStep
@@ -554,10 +590,14 @@ private fun ClientKnob(
                         while (accDelta <= -degreesPerStep) {
                             when (mode) {
                                 KnobMode.LATENCY -> if (displayLatency > minLatency) {
-                                    val v = (displayLatency - 1).coerceAtLeast(minLatency); displayLatency = v; onLatencyChange(v)
+                                    val v = (displayLatency - 1).coerceAtLeast(minLatency)
+                                    displayLatency = v
+                                    onLatencyChange(v)
                                 }
                                 KnobMode.VOLUME -> if (displayVolume > 0) {
-                                    val v = (displayVolume - 1).coerceAtLeast(0); displayVolume = v; onVolumeChange(v)
+                                    val v = (displayVolume - 1).coerceAtLeast(0)
+                                    displayVolume = v
+                                    onVolumeChange(v)
                                 }
                             }
                             accDelta += degreesPerStep

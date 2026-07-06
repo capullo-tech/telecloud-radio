@@ -72,15 +72,12 @@ class DownloadManager @Inject constructor(
         return path
     }
 
-    fun getCachedPath(messageId: Long): String? =
-        downloadedFiles[messageId]?.takeIf { File(it).exists() }
+    fun getCachedPath(messageId: Long): String? = downloadedFiles[messageId]?.takeIf { File(it).exists() }
 
-    suspend fun isDownloaded(messageId: Long): Boolean =
-        getCachedPath(messageId) != null ||
-            dao.getLocalPath(messageId)?.let { File(it).exists() } == true
+    suspend fun isDownloaded(messageId: Long): Boolean = getCachedPath(messageId) != null ||
+        dao.getLocalPath(messageId)?.let { File(it).exists() } == true
 
-    fun spectrogramFile(messageId: Long): File =
-        File(context.filesDir, "spectrograms/spect_$messageId.bin")
+    fun spectrogramFile(messageId: Long): File = File(context.filesDir, "spectrograms/spect_$messageId.bin")
 
     suspend fun evict(messageId: Long) {
         val path = downloadedFiles.remove(messageId) ?: return
@@ -131,6 +128,5 @@ class DownloadManager @Inject constructor(
         }
     }
 
-    private fun totalDownloadedBytes(): Long =
-        downloadedFiles.values.sumOf { path -> File(path).length() }
+    private fun totalDownloadedBytes(): Long = downloadedFiles.values.sumOf { path -> File(path).length() }
 }

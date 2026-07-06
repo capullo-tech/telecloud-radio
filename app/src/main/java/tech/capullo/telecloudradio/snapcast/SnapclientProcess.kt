@@ -41,11 +41,11 @@ class SnapclientProcess(private val context: Context) {
     val storedHostId: String
         get() = localHostId(context)
 
-    private var _process: Process? = null
+    private var currentProcess: Process? = null
 
     fun destroy() {
-        _process?.destroyForcibly()
-        _process = null
+        currentProcess?.destroyForcibly()
+        currentProcess = null
     }
 
     /** Switch the live audio channel (stereo / left / right) without restarting
@@ -93,7 +93,7 @@ class SnapclientProcess(private val context: Context) {
         if (rate != null) env["SAMPLE_RATE"] = rate
         if (fpb != null) env["FRAMES_PER_BUFFER"] = fpb
 
-        val process = pb.start().also { _process = it }
+        val process = pb.start().also { currentProcess = it }
         try {
             val reader = BufferedReader(InputStreamReader(process.inputStream))
             var line: String?
@@ -124,8 +124,7 @@ class SnapclientProcess(private val context: Context) {
         /** The persistent --hostID this device's snapclient registers with -
          *  equals its client id on any snapserver (used to identify self in
          *  client lists). Empty until the first client run. */
-        fun localHostId(context: Context): String =
-            context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
-                .getString(PREFS_KEY, null) ?: ""
+        fun localHostId(context: Context): String = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+            .getString(PREFS_KEY, null) ?: ""
     }
 }

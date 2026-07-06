@@ -30,23 +30,23 @@ internal fun extractUploaderFromFilename(fileName: String?): String? {
 }
 
 // Same chain as the now-playing label, plus Telegram sender as a last resort
-internal fun uploaderKey(track: MediaMessageEntity): String? =
-    extractUploader(track.caption)
-        ?: extractUploaderFromFilename(track.fileName)
-        ?: track.senderUsername?.let { "@$it" }
-        ?: track.senderId?.let { "user $it" }
+internal fun uploaderKey(track: MediaMessageEntity): String? = extractUploader(track.caption)
+    ?: extractUploaderFromFilename(track.fileName)
+    ?: track.senderUsername?.let { "@$it" }
+    ?: track.senderId?.let { "user $it" }
 
-internal fun extensionKey(track: MediaMessageEntity): String? =
-    track.fileName?.substringAfterLast('.', "")?.lowercase()
-        ?.takeIf { it.isNotBlank() && it.length <= 5 && it.none(Char::isWhitespace) }
-        ?: track.mimeType?.substringAfterLast('/')?.lowercase()
+internal fun extensionKey(track: MediaMessageEntity): String? = track.fileName?.substringAfterLast('.', "")?.lowercase()
+    ?.takeIf { it.isNotBlank() && it.length <= 5 && it.none(Char::isWhitespace) }
+    ?: track.mimeType?.substringAfterLast('/')?.lowercase()
 
 internal fun monthKey(dateStr: String?): String? {
     if (dateStr.isNullOrBlank()) return null
     return try {
         val epochSeconds = dateStr.toLong()
         SimpleDateFormat("MMM yyyy", Locale.getDefault()).format(Date(epochSeconds * 1000))
-    } catch (_: Exception) { null }
+    } catch (_: Exception) {
+        null
+    }
 }
 
 // Relative date presets shown at the top of the Date filter dropdown
@@ -94,10 +94,12 @@ data class QueueFilters(
         return (uploaders.isEmpty() || (uploaderKey(track) ?: "") in uploaders) &&
             (months.isEmpty() || months.any { matchesDateKey(track.date, it) }) &&
             (extensions.isEmpty() || (extensionKey(track) ?: "") in extensions) &&
-            (q.isEmpty() ||
-                track.title?.lowercase()?.contains(q) == true ||
-                track.performer?.lowercase()?.contains(q) == true ||
-                track.fileName?.lowercase()?.contains(q) == true)
+            (
+                q.isEmpty() ||
+                    track.title?.lowercase()?.contains(q) == true ||
+                    track.performer?.lowercase()?.contains(q) == true ||
+                    track.fileName?.lowercase()?.contains(q) == true
+                )
     }
 
     fun toJson(): String = JSONObject().apply {
@@ -116,7 +118,12 @@ data class QueueFilters(
                     val a = o.optJSONArray(name) ?: return emptySet()
                     return (0 until a.length()).map(a::getString).toSet()
                 }
-                QueueFilters(set("uploaders"), set("months"), set("extensions"), o.optString("search"))
+                QueueFilters(
+                    set("uploaders"),
+                    set("months"),
+                    set("extensions"),
+                    o.optString("search"),
+                )
             }.getOrDefault(QueueFilters())
         }
     }

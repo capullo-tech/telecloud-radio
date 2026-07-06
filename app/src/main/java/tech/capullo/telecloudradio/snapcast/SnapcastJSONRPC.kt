@@ -238,17 +238,16 @@ fun StreamMetadata.firstArtist(): String = when (val a = artist) {
 }
 
 object NotificationSerializer : JsonContentPolymorphicSerializer<Notification>(Notification::class) {
-    override fun selectDeserializer(element: JsonElement): DeserializationStrategy<Notification> =
-        when (element.jsonObject["method"].toString()) {
-            "\"Server.OnUpdate\"" -> ServerOnUpdate.serializer()
-            "\"Client.OnVolumeChanged\"" -> ClientOnVolumeChanged.serializer()
-            "\"Client.OnLatencyChanged\"" -> ClientOnLatencyChanged.serializer()
-            "\"Client.OnDisconnect\"" -> ClientOnDisconnect.serializer()
-            "\"Client.OnConnect\"" -> ClientOnConnect.serializer()
-            "\"Client.OnNameChanged\"" -> ClientOnNameChanged.serializer()
-            "\"Stream.OnProperties\"" -> StreamOnProperties.serializer()
-            else -> GenericNotification.serializer()
-        }
+    override fun selectDeserializer(element: JsonElement): DeserializationStrategy<Notification> = when (element.jsonObject["method"].toString()) {
+        "\"Server.OnUpdate\"" -> ServerOnUpdate.serializer()
+        "\"Client.OnVolumeChanged\"" -> ClientOnVolumeChanged.serializer()
+        "\"Client.OnLatencyChanged\"" -> ClientOnLatencyChanged.serializer()
+        "\"Client.OnDisconnect\"" -> ClientOnDisconnect.serializer()
+        "\"Client.OnConnect\"" -> ClientOnConnect.serializer()
+        "\"Client.OnNameChanged\"" -> ClientOnNameChanged.serializer()
+        "\"Stream.OnProperties\"" -> StreamOnProperties.serializer()
+        else -> GenericNotification.serializer()
+    }
 }
 
 @Serializable
@@ -258,8 +257,7 @@ abstract class RequestResponse : SnapcastJSONRPCResponse() {
 }
 
 object RequestResponseSerializer : JsonContentPolymorphicSerializer<RequestResponse>(RequestResponse::class) {
-    override fun selectDeserializer(element: JsonElement): DeserializationStrategy<RequestResponse> =
-        ServerGetStatusResponse.serializer()
+    override fun selectDeserializer(element: JsonElement): DeserializationStrategy<RequestResponse> = ServerGetStatusResponse.serializer()
 }
 
 @Serializable
@@ -269,6 +267,5 @@ abstract class SnapcastJSONRPCResponse {
 
 object SnapcastJSONRPCResponseSerializer :
     JsonContentPolymorphicSerializer<SnapcastJSONRPCResponse>(SnapcastJSONRPCResponse::class) {
-    override fun selectDeserializer(element: JsonElement): DeserializationStrategy<SnapcastJSONRPCResponse> =
-        if ("method" in element.jsonObject) NotificationSerializer else RequestResponseSerializer
+    override fun selectDeserializer(element: JsonElement): DeserializationStrategy<SnapcastJSONRPCResponse> = if ("method" in element.jsonObject) NotificationSerializer else RequestResponseSerializer
 }

@@ -54,17 +54,25 @@ class AudioAnalyzer @Inject constructor() {
             for (i in 0 until extractor.trackCount) {
                 val f = extractor.getTrackFormat(i)
                 if (f.getString(MediaFormat.KEY_MIME)?.startsWith("audio/") == true) {
-                    trackIndex = i; format = f; break
+                    trackIndex = i
+                    format = f
+                    break
                 }
             }
             if (trackIndex < 0 || format == null) return null
             extractor.selectTrack(trackIndex)
 
             val mime = format.getString(MediaFormat.KEY_MIME) ?: return null
-            val sampleRate = if (format.containsKey(MediaFormat.KEY_SAMPLE_RATE))
-                format.getInteger(MediaFormat.KEY_SAMPLE_RATE) else 44100
-            val channelCount = if (format.containsKey(MediaFormat.KEY_CHANNEL_COUNT))
-                format.getInteger(MediaFormat.KEY_CHANNEL_COUNT) else 2
+            val sampleRate = if (format.containsKey(MediaFormat.KEY_SAMPLE_RATE)) {
+                format.getInteger(MediaFormat.KEY_SAMPLE_RATE)
+            } else {
+                44100
+            }
+            val channelCount = if (format.containsKey(MediaFormat.KEY_CHANNEL_COUNT)) {
+                format.getInteger(MediaFormat.KEY_CHANNEL_COUNT)
+            } else {
+                2
+            }
             val maxSamples = sampleRate * MAX_ANALYZE_SECONDS * channelCount
 
             val pcm: FloatArray = if (mime == "audio/raw") {
@@ -108,7 +116,9 @@ class AudioAnalyzer @Inject constructor() {
                     for (ch in 0 until channelCount) sum += pcm[i * channelCount + ch]
                     sum / channelCount
                 }
-            } else pcm
+            } else {
+                pcm
+            }
 
             // Global Peak & RMS
             var peak = 0f
@@ -125,7 +135,8 @@ class AudioAnalyzer @Inject constructor() {
             // True Peak via 4× linear oversampling
             var tp = peak
             for (i in 0 until mono.size - 1) {
-                val a = mono[i]; val b = mono[i + 1]
+                val a = mono[i]
+                val b = mono[i + 1]
                 for (t in 1..3) {
                     val v = abs(a + (b - a) * t / 4f)
                     if (v > tp) tp = v
@@ -160,8 +171,9 @@ class AudioAnalyzer @Inject constructor() {
             val nyquistHz = sampleRate / 2
 
             val avgMagDb = FloatArray(specBins) { i ->
-                if (totalFrames == 0) FLOOR_DB
-                else {
+                if (totalFrames == 0) {
+                    FLOOR_DB
+                } else {
                     val avg = (accumAvg[i] / totalFrames).toFloat()
                     if (avg > 1e-12f) maxOf(20f * log10(avg / FFT_SIZE.toFloat()), FLOOR_DB) else FLOOR_DB
                 }
@@ -170,7 +182,10 @@ class AudioAnalyzer @Inject constructor() {
             val minBin = (4000f / freqRes).toInt().coerceIn(0, specBins - 1)
             var cutoffBin = minBin
             for (i in specBins - 1 downTo minBin) {
-                if (avgMagDb[i] > -80f) { cutoffBin = i; break }
+                if (avgMagDb[i] > -80f) {
+                    cutoffBin = i
+                    break
+                }
             }
             val spectralCutoffHz = (cutoffBin * freqRes).toInt()
             val lossless = isLosslessContainer(path, mimeType)
@@ -199,7 +214,10 @@ class AudioAnalyzer @Inject constructor() {
         } catch (_: Exception) {
             null
         } finally {
-            runCatching { codec?.stop(); codec?.release() }
+            runCatching {
+                codec?.stop()
+                codec?.release()
+            }
             extractor.release()
         }
     }
@@ -214,7 +232,9 @@ class AudioAnalyzer @Inject constructor() {
         for (ch in 0 until chsToProcess) {
             val chSamples = if (channelCount > 1) {
                 FloatArray(n) { i -> samples[i * channelCount + ch] }
-            } else samples
+            } else {
+                samples
+            }
             val kw = applyKWeighting(chSamples, sampleRate)
             var ms = 0.0
             for (s in kw) ms += s.toDouble() * s
@@ -247,14 +267,18 @@ class AudioAnalyzer @Inject constructor() {
 
     private fun biquadFilter(x: FloatArray, b: DoubleArray, a: DoubleArray): FloatArray {
         val y = FloatArray(x.size)
-        var x1 = 0.0; var x2 = 0.0
-        var y1 = 0.0; var y2 = 0.0
+        var x1 = 0.0
+        var x2 = 0.0
+        var y1 = 0.0
+        var y2 = 0.0
         for (i in x.indices) {
             val xi = x[i].toDouble()
             val yi = b[0] * xi + b[1] * x1 + b[2] * x2 - a[0] * y1 - a[1] * y2
             y[i] = yi.toFloat()
-            x2 = x1; x1 = xi
-            y2 = y1; y1 = yi
+            x2 = x1
+            x1 = xi
+            y2 = y1
+            y1 = yi
         }
         return y
     }
@@ -301,11 +325,13 @@ class AudioAnalyzer @Inject constructor() {
             for (f in 0 until numF) {
                 val fLo = (f * fRatio).toInt()
                 val fHi = ((f + 1) * fRatio).toInt().coerceAtMost(srcFreqBins)
-                var sum = 0.0; var count = 0
+                var sum = 0.0
+                var count = 0
                 for (ti in tLo until tHi.coerceAtLeast(tLo + 1)) {
                     val frame = frames.getOrNull(ti) ?: continue
                     for (fi in fLo until fHi.coerceAtLeast(fLo + 1)) {
-                        sum += frame.getOrElse(fi) { 0f }.toDouble(); count++
+                        sum += frame.getOrElse(fi) { 0f }.toDouble()
+                        count++
                     }
                 }
                 val mag = if (count > 0) (sum / count).toFloat() else 0f
@@ -368,7 +394,10 @@ class AudioAnalyzer @Inject constructor() {
         var j = 0
         for (i in 1 until n) {
             var bit = n shr 1
-            while (j and bit != 0) { j = j xor bit; bit = bit shr 1 }
+            while (j and bit != 0) {
+                j = j xor bit
+                bit = bit shr 1
+            }
             j = j xor bit
             if (i < j) {
                 re[i] = re[j].also { re[j] = re[i] }
@@ -379,18 +408,24 @@ class AudioAnalyzer @Inject constructor() {
         while (s <= n) {
             val half = s ushr 1
             val ang = -2.0 * PI / s
-            val wRe = cos(ang).toFloat(); val wIm = sin(ang).toFloat()
+            val wRe = cos(ang).toFloat()
+            val wIm = sin(ang).toFloat()
             var k = 0
             while (k < n) {
-                var tRe = 1f; var tIm = 0f
+                var tRe = 1f
+                var tIm = 0f
                 for (m in 0 until half) {
-                    val uRe = re[k + m]; val uIm = im[k + m]
+                    val uRe = re[k + m]
+                    val uIm = im[k + m]
                     val vRe = re[k + m + half] * tRe - im[k + m + half] * tIm
                     val vIm = re[k + m + half] * tIm + im[k + m + half] * tRe
-                    re[k + m] = uRe + vRe; im[k + m] = uIm + vIm
-                    re[k + m + half] = uRe - vRe; im[k + m + half] = uIm - vIm
+                    re[k + m] = uRe + vRe
+                    im[k + m] = uIm + vIm
+                    re[k + m + half] = uRe - vRe
+                    im[k + m + half] = uIm - vIm
                     val newTRe = tRe * wRe - tIm * wIm
-                    tIm = tRe * wIm + tIm * wRe; tRe = newTRe
+                    tIm = tRe * wIm + tIm * wRe
+                    tRe = newTRe
                 }
                 k += s
             }

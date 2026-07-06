@@ -7,14 +7,11 @@ import javax.inject.Singleton
 
 @Singleton
 class PlaylistRepository @Inject constructor(private val dao: MediaMessageDao) {
-    suspend fun loadShuffledPlaylist(chatId: Long): List<MediaMessageEntity> =
-        dao.getPlaylist(chatId).shuffled()
+    suspend fun loadShuffledPlaylist(chatId: Long): List<MediaMessageEntity> = dao.getPlaylist(chatId).shuffled()
 
-    suspend fun loadPlaylist(chatId: Long): List<MediaMessageEntity> =
-        dao.getPlaylistNewestFirst(chatId)
+    suspend fun loadPlaylist(chatId: Long): List<MediaMessageEntity> = dao.getPlaylistNewestFirst(chatId)
 
-    suspend fun loadLocalPlaylist(chatId: Long): List<MediaMessageEntity> =
-        dao.getLocalTracks(chatId)
+    suspend fun loadLocalPlaylist(chatId: Long): List<MediaMessageEntity> = dao.getLocalTracks(chatId)
 
     suspend fun getTotalSize(chatId: Long): Long = dao.getTotalSize(chatId) ?: 0L
 

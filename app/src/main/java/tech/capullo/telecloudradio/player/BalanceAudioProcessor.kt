@@ -19,7 +19,9 @@ class BalanceAudioProcessor : BaseAudioProcessor() {
 
     override fun onConfigure(inputAudioFormat: AudioFormat): AudioFormat {
         // Only handle 16-bit stereo; report inactive otherwise so the sink bypasses us
-        if (inputAudioFormat.encoding != C.ENCODING_PCM_16BIT || inputAudioFormat.channelCount != 2) {
+        if (inputAudioFormat.encoding != C.ENCODING_PCM_16BIT ||
+            inputAudioFormat.channelCount != 2
+        ) {
             return AudioFormat.NOT_SET
         }
         return inputAudioFormat

@@ -24,9 +24,7 @@ sealed class GroupSelectorUiState {
 }
 
 @HiltViewModel
-class GroupSelectorViewModel @Inject constructor(
-    private val repository: TelegramRepository,
-) : ViewModel() {
+class GroupSelectorViewModel @Inject constructor(private val repository: TelegramRepository) : ViewModel() {
 
     private val _uiState = MutableStateFlow<GroupSelectorUiState>(GroupSelectorUiState.Loading)
     val uiState = _uiState.asStateFlow()
@@ -39,7 +37,10 @@ class GroupSelectorViewModel @Inject constructor(
         _uiState.value = GroupSelectorUiState.Loading
         runCatching { repository.getAudioGroups(limit) }
             .onSuccess { _uiState.value = GroupSelectorUiState.Loaded(it) }
-            .onFailure { _uiState.value = GroupSelectorUiState.Error(it.message ?: "Failed to load groups") }
+            .onFailure {
+                _uiState.value =
+                    GroupSelectorUiState.Error(it.message ?: "Failed to load groups")
+            }
     }
 
     fun backToList() = loadGroups()

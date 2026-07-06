@@ -12,11 +12,13 @@ import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.SegmentedButton
@@ -35,8 +37,6 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
-import androidx.compose.material3.AlertDialog
-import androidx.compose.material3.OutlinedButton
 import androidx.hilt.lifecycle.viewmodel.compose.hiltViewModel
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
@@ -78,15 +78,21 @@ class SettingsViewModel @Inject constructor(
 
     var bufferSizeGb: Float
         get() = settings.bufferSizeGb
-        set(value) { settings.bufferSizeGb = value }
+        set(value) {
+            settings.bufferSizeGb = value
+        }
 
     var rememberLastGroup: Boolean
         get() = settings.rememberLastGroup
-        set(value) { settings.rememberLastGroup = value }
+        set(value) {
+            settings.rememberLastGroup = value
+        }
 
     var sleepTimerMinutes: Int
         get() = settings.sleepTimerMinutes
-        set(value) { settings.sleepTimerMinutes = value }
+        set(value) {
+            settings.sleepTimerMinutes = value
+        }
 
     val themeMode: StateFlow<ThemeMode> = settings.themeMode
     fun setThemeMode(mode: ThemeMode) = settings.setThemeMode(mode)
@@ -107,9 +113,13 @@ fun SettingsScreen(
     onBack: () -> Unit,
     viewModel: SettingsViewModel = hiltViewModel(),
 ) {
-    var text by remember { mutableStateOf(viewModel.bufferSizeGb.let {
-        if (it == it.toLong().toFloat()) it.toLong().toString() else it.toString()
-    }) }
+    var text by remember {
+        mutableStateOf(
+            viewModel.bufferSizeGb.let {
+                if (it == it.toLong().toFloat()) it.toLong().toString() else it.toString()
+            },
+        )
+    }
     var isError by remember { mutableStateOf(false) }
 
     Scaffold(
@@ -210,7 +220,10 @@ fun SettingsScreen(
                 var rememberChecked by remember { mutableStateOf(viewModel.rememberLastGroup) }
                 Switch(
                     checked = rememberChecked,
-                    onCheckedChange = { rememberChecked = it; viewModel.rememberLastGroup = it },
+                    onCheckedChange = {
+                        rememberChecked = it
+                        viewModel.rememberLastGroup = it
+                    },
                 )
             }
 
