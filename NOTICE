@@ -1,0 +1,33 @@
+Telecloud Radio
+Copyright 2026 capullo-tech
+
+This product includes software developed by and for the following projects:
+
+RadioCapullo (https://github.com/capullo-tech/RadioCapullo)
+  Copyright capullo-tech
+  The Snapcast Android integration, multiroom control architecture,
+  stream plugin protocol, and StreamOnProperties implementation in this
+  project are substantially derived from RadioCapullo.
+
+lib-snapcast-android (https://github.com/capullo-tech/lib-snapcast-android)
+  Copyright capullo-tech
+  Native Snapcast server and client libraries packaged for Android,
+  used under the terms of their respective licenses.
+
+Snapcast (https://github.com/badaix/snapcast)
+  Copyright 2014-2024 Johannes Pohl
+  Licensed under the GNU General Public License v3.0.
+  This product bundles and executes the Snapcast server and client as
+  native binaries for multiroom audio broadcast.
+
+TDLib (https://github.com/tdlib/td) via TGX-Android/tdlib prebuilt
+  Copyright Aliaksei Levin, Arseny Smirnov and the TDLib contributors
+  Licensed under the Boost Software License 1.0.
+  The Telegram Database Library (TDLib) Java API and prebuilt native
+  binaries are fetched at build time (scripts/setup_tdlib.sh) and used
+  to access the Telegram platform.
+
+jaudiotagger (https://www.jthink.net/jaudiotagger/)
+  Copyright Paul Taylor and contributors
+  Licensed under the GNU Lesser General Public License.
+  Used to read audio file metadata.
