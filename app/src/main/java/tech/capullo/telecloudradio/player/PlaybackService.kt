@@ -118,6 +118,34 @@ class PlaybackService : MediaSessionService() {
         if (Looper.myLooper() == Looper.getMainLooper()) block() else mainHandler.post(block)
     }
 
+    /**
+     * A matrix that collapses [inputChannelCount] channels to stereo. 5.1 (6ch) uses the standard
+     * ITU-R BS.775 coefficients (FL FR FC LFE BL BR order); other counts route ch0->L, ch1->R and
+     * fold any remaining channels equally into both. Keeps the broadcast in stereo regardless of the
+     * source's channel layout.
+     */
+    private fun stereoDownmixMatrix(inputChannelCount: Int): ChannelMixingMatrix {
+        val out = 2
+        val c = FloatArray(inputChannelCount * out)
+        fun set(inCh: Int, l: Float, r: Float) {
+            c[inCh * out] = l
+            c[inCh * out + 1] = r
+        }
+        if (inputChannelCount == 6) {
+            set(0, 1f, 0f) // FL -> L
+            set(1, 0f, 1f) // FR -> R
+            set(2, 0.707f, 0.707f) // FC -> both
+            set(3, 0f, 0f) // LFE dropped
+            set(4, 0.707f, 0f) // BL -> L
+            set(5, 0f, 0.707f) // BR -> R
+        } else {
+            set(0, 1f, 0f)
+            if (inputChannelCount > 1) set(1, 0f, 1f)
+            for (i in 2 until inputChannelCount) set(i, 0.707f, 0.707f)
+        }
+        return ChannelMixingMatrix(inputChannelCount, out, c)
+    }
+
     override fun onCreate() {
         super.onCreate()
 
@@ -140,6 +168,11 @@ class PlaybackService : MediaSessionService() {
                 val mixer = ChannelMixingAudioProcessor().apply {
                     putChannelMixingMatrix(ChannelMixingMatrix.create(1, 2))
                     putChannelMixingMatrix(ChannelMixingMatrix.create(2, 2))
+                    // The FFmpeg audio extension (now on the classpath via capullo-audio) decodes
+                    // multichannel FLAC/etc. to its native channel count. Register downmix matrices
+                    // for 3..8 channels so the sink accepts them instead of failing the renderer
+                    // with a MediaCodecAudioRenderer error on e.g. a 5.1 track.
+                    for (channels in 3..8) putChannelMixingMatrix(stereoDownmixMatrix(channels))
                 }
                 val resampler = SonicAudioProcessor().apply { setOutputSampleRateHz(44100) }
                 return DefaultAudioSink.Builder(context)

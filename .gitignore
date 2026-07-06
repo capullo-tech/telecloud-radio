@@ -20,3 +20,6 @@ tdlib/build/
 # Windows build-host helpers (gitignored, live only on the share)
 run-*.cmd
 build-share.log
+
+# stray test APKs pulled for device install
+*.apk
