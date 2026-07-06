@@ -1,0 +1,43 @@
+name: CodeQL
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  schedule:
+    - cron: '31 5 * * 1'
+
+jobs:
+  analyze:
+    name: Analyze (java-kotlin)
+    runs-on: ubuntu-latest
+    permissions:
+      security-events: write
+      contents: read
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+      # :tdlib is script-populated (NOT a submodule); populate before the traced compile so the
+      # module's sources exist.
+      - name: Populate :tdlib (setup_tdlib.sh)
+        run: |
+          chmod +x scripts/setup_tdlib.sh
+          ./scripts/setup_tdlib.sh
+      - name: Setup Java
+        uses: actions/setup-java@v4
+        with:
+          java-version: '17'
+          distribution: 'temurin'
+      - name: Initialize CodeQL
+        uses: github/codeql-action/init@v3
+        with:
+          language: java-kotlin
+      - name: Setup Gradle
+        uses: gradle/actions/setup-gradle@v4
+      # --rerun-tasks forces a real compile (incl. KSP/Room + Hilt codegen) so CodeQL traces it
+      # even on a warm Gradle cache (build-mode none is Java-only; Kotlin needs a traced build).
+      - name: Build for analysis (Android SDK preinstalled)
+        run: ./gradlew :app:assembleDebug --no-daemon --rerun-tasks
+      - name: Perform CodeQL Analysis
+        uses: github/codeql-action/analyze@v3
