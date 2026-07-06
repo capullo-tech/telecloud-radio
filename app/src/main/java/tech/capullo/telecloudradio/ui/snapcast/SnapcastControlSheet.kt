@@ -37,7 +37,7 @@ import androidx.compose.ui.unit.dp
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
-import tech.capullo.telecloudradio.snapcast.Group
+import tech.capullo.audio.snapcast.Group
 import kotlin.math.PI
 import kotlin.math.abs
 import kotlin.math.cos

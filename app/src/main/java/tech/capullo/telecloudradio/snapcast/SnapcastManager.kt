@@ -13,6 +13,26 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
+import tech.capullo.audio.contracts.NowPlaying
+import tech.capullo.audio.contracts.PlaybackController
+import tech.capullo.audio.snapcast.ClientOnConnect
+import tech.capullo.audio.snapcast.ClientOnDisconnect
+import tech.capullo.audio.snapcast.ClientOnLatencyChanged
+import tech.capullo.audio.snapcast.ClientOnNameChanged
+import tech.capullo.audio.snapcast.ClientOnVolumeChanged
+import tech.capullo.audio.snapcast.Group
+import tech.capullo.audio.snapcast.ServerGetStatusResponse
+import tech.capullo.audio.snapcast.ServerOnUpdate
+import tech.capullo.audio.snapcast.ServerStatusResult
+import tech.capullo.audio.snapcast.SnapcastControlClient
+import tech.capullo.audio.snapcast.SnapclientProcess
+import tech.capullo.audio.snapcast.SnapcontrolPlugin
+import tech.capullo.audio.snapcast.SnapserverDiscoveryManager
+import tech.capullo.audio.snapcast.SnapserverNsdRegistrar
+import tech.capullo.audio.snapcast.SnapserverProcess
+import tech.capullo.audio.snapcast.StreamOnProperties
+import tech.capullo.audio.snapcast.StreamPlayerProperties
+import tech.capullo.audio.snapcast.Volume
 import javax.inject.Inject
 import javax.inject.Singleton
 
@@ -90,25 +110,35 @@ class SnapcastManager @Inject constructor(
      */
     fun prepareBroadcast(): String {
         stopBroadcast()
-        return SnapserverProcess(context).also { snapserverProcess = it }.pipeFilepath
+        return SnapserverProcess(context, STREAM_NAME, SnapcastPorts.asSnapserverPorts)
+            .also { snapserverProcess = it }.pipeFilepath
     }
 
     /**
      * Starts snapserver + local snapclient + metadata plugin + NSD + control
      * socket. Idempotent — called on every "playing" transition.
      */
-    fun startBroadcast(callbacks: SnapcontrolCallbacks) {
+    fun startBroadcast(nowPlaying: StateFlow<NowPlaying>, controller: PlaybackController) {
         if (_state.value.isBroadcasting) return
         if (_state.value.isListening) return // listen-in owns the snapclient/ports
         // Lazily recreated after a listen-in session tore the stack down; the
         // FIFO file is reused so the tee sink's open write end stays valid.
-        val snapserver = snapserverProcess ?: SnapserverProcess(context).also { snapserverProcess = it }
+        val snapserver = snapserverProcess
+            ?: SnapserverProcess(context, STREAM_NAME, SnapcastPorts.asSnapserverPorts)
+                .also { snapserverProcess = it }
         Log.d(TAG, "Starting broadcast stack")
-        // Plugin must be listening before snapserver spawns libsnapcontrol.so
-        snapcontrolPlugin = SnapcontrolPlugin(callbacks, scope.coroutineContext[Job]!!).also { it.start() }
+        // Plugin must be listening before snapserver spawns libsnapcontrol.so. The engine's
+        // SnapcontrolPlugin is contract-driven: a StateFlow<NowPlaying> (read) + a PlaybackController
+        // (transport), replacing Telecloud's former fat SnapcontrolCallbacks.
+        snapcontrolPlugin = SnapcontrolPlugin(nowPlaying, controller, scope.coroutineContext[Job]!!)
+            .also {
+                it.isStreamLocked = _state.value.isStreamLocked
+                it.start()
+            }
         snapserverJob = scope.launch { snapserver.start() }
         startLocalSnapclient("localhost", SnapcastPorts.STREAM)
-        nsdRegistrar = SnapserverNsdRegistrar(context).also { it.start() }
+        nsdRegistrar = SnapserverNsdRegistrar(context)
+            .also { it.start("", SnapcastPorts.STREAM, SnapcastPorts.TCP) }
         startControl("localhost")
         _state.update { it.copy(isBroadcasting = true) }
     }
@@ -305,7 +335,7 @@ class SnapcastManager @Inject constructor(
 
     private fun startControl(host: String) {
         stopControl()
-        val client = SnapcastControlClient(host).also { controlClient = it }
+        val client = SnapcastControlClient(host, SnapcastPorts.HTTP).also { controlClient = it }
         controlJob = scope.launch {
             client.initialize()
             client.notifications.collect { notif ->
@@ -362,7 +392,7 @@ class SnapcastManager @Inject constructor(
     private fun stopControl() {
         controlJob?.cancel()
         controlJob = null
-        runCatching { controlClient?.client?.close() }
+        runCatching { controlClient?.close() }
         controlClient = null
     }
 
@@ -466,5 +496,8 @@ class SnapcastManager @Inject constructor(
 
     companion object {
         private const val TAG = "SnapcastManager"
+
+        /** The Snapcast stream `name=` identity for this app (web player + snapclients). */
+        private const val STREAM_NAME = "TelecloudRadio"
     }
 }

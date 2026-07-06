@@ -92,6 +92,11 @@ dependencies {
     implementation(libs.kotlinx.coroutines.android)
     implementation("net.jthink:jaudiotagger:3.0.1")
 
+    // capullo-audio (Layer 2) — the delivery engine's public transport classes: SnapserverProcess,
+    // SnapclientProcess, SnapcastControlClient, SnapcontrolPlugin, FIFO sink, BalanceAudioProcessor
+    // (re-exports capullo-audio-contracts as api). Brings lib-snapcast-android + ktor transitively.
+    implementation(libs.capullo.audio)
+
     // Snapcast multiroom broadcast: native snapserver/snapclient binaries +
     // ktor WebSocket client for the Snapcast JSON-RPC control API
     implementation(libs.lib.snapcast.android)

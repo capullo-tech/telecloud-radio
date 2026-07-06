@@ -15,6 +15,10 @@ kotlinxSerialization = "1.10.0"
 ktor = "2.3.12"
 snapcast = "78d1c48"
 zxing = "3.5.3"
+# capullo-audio (Layer 2, the delivery engine) — the recompose consumes its public transport classes
+# (SnapserverProcess/SnapclientProcess/SnapcastControlClient/SnapcontrolPlugin/FIFO/BalanceAudioProcessor).
+# Pinned to an immutable jitpack commit (main-SNAPSHOT serves stale artifacts -> a CI trap).
+capulloAudio = "f27c088"
 ksp = "2.3.9"
 lifecycleRuntimeKtx = "2.10.0"
 lifecycleViewmodelNav3 = "2.10.0"
@@ -68,6 +72,7 @@ ktor-client-okhttp = { module = "io.ktor:ktor-client-okhttp", version.ref = "kto
 ktor-client-websockets = { module = "io.ktor:ktor-client-websockets", version.ref = "ktor" }
 ktor-serialization-kotlinx-json = { module = "io.ktor:ktor-serialization-kotlinx-json", version.ref = "ktor" }
 lib-snapcast-android = { module = "com.github.capullo-tech.lib-snapcast-android:lib-snapcast-android", version.ref = "snapcast" }
+capullo-audio = { module = "com.github.capullo-tech:capullo-audio", version.ref = "capulloAudio" }
 zxing-core = { module = "com.google.zxing:core", version.ref = "zxing" }
 kotlinx-coroutines-test = { group = "org.jetbrains.kotlinx", name = "kotlinx-coroutines-test", version.ref = "kotlinxCoroutinesAndroid" }
 mockk = { group = "io.mockk", name = "mockk", version.ref = "mockk" }
