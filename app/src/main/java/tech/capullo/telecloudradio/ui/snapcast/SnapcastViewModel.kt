@@ -3,7 +3,7 @@ package tech.capullo.telecloudradio.ui.snapcast
 import androidx.lifecycle.ViewModel
 import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.flow.StateFlow
-import tech.capullo.telecloudradio.snapcast.DiscoveredSnapserver
+import tech.capullo.audio.snapcast.DiscoveredSnapserver
 import tech.capullo.telecloudradio.snapcast.SnapcastManager
 import javax.inject.Inject
 

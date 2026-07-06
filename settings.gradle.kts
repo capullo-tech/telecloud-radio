@@ -21,6 +21,18 @@ dependencyResolutionManagement {
     }
 }
 
+// Dev: if the sibling capullo-audio checkout exists, build it from source and substitute it for its
+// jitpack coordinate (local composite build). On CI / off-share builds (no sibling) the block is
+// skipped and the coordinate resolves from jitpack.io at the pinned commit.
+if (file("../capullo-audio").exists()) {
+    includeBuild("../capullo-audio") {
+        dependencySubstitution {
+            substitute(module("com.github.capullo-tech:capullo-audio"))
+                .using(project(":capullo-audio"))
+        }
+    }
+}
+
 rootProject.name = "TelecloudRadio"
 include(":app")
 // :tdlib is populated by running ./scripts/setup_tdlib.sh

@@ -5,6 +5,7 @@ import android.content.Context
 import android.content.Intent
 import android.os.Handler
 import android.os.Looper
+import android.util.Base64
 import androidx.annotation.OptIn
 import androidx.media3.common.AudioAttributes
 import androidx.media3.common.C
@@ -26,16 +27,20 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
+import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.launch
+import tech.capullo.audio.contracts.NowPlaying
+import tech.capullo.audio.contracts.PlaybackController
+import tech.capullo.audio.player.BalanceAudioProcessor
+import tech.capullo.audio.player.FifoAudioBufferSink
 import tech.capullo.telecloudradio.MainActivity
 import tech.capullo.telecloudradio.data.SettingsRepository
 import tech.capullo.telecloudradio.data.playlist.ActiveTrackRepository
 import tech.capullo.telecloudradio.data.playlist.PlaybackCommand
 import tech.capullo.telecloudradio.snapcast.SnapcastManager
-import tech.capullo.telecloudradio.snapcast.SnapcontrolCallbacks
 import javax.inject.Inject
 
 /**
@@ -68,24 +73,45 @@ class PlaybackService : MediaSessionService() {
     // ExoPlayer only allows access from its application thread.
     @Volatile private var playerIsPlaying = false
 
-    private val snapcontrolCallbacks = object : SnapcontrolCallbacks {
-        override val isPlaying get() = playerIsPlaying
-        override val isPaused get() = !playerIsPlaying && activeTrackRepository.activePlayback.value != null
-        override val canSkip get() = activeTrackRepository.activePlayback.value != null
-        override val currentTitle get() = activeTrackRepository.activePlayback.value
-            ?.let { it.track.title ?: it.track.fileName } ?: ""
-        override val currentArtist get() = activeTrackRepository.activePlayback.value?.track?.performer ?: ""
-        override val currentStation get() = activeTrackRepository.activePlayback.value?.chatTitle ?: ""
-        override val currentArtworkBytes get() = activeTrackRepository.activePlayback.value?.albumArt
+    // --- Snapcast control-plugin adapter (capullo-audio SnapcontrolPlugin) ---
+    // The engine's SnapcontrolPlugin is contract-driven: a StateFlow<NowPlaying> (read) + a
+    // PlaybackController (transport), replacing Telecloud's former fat SnapcontrolCallbacks.
+    // buildSnapNowPlaying() maps the active Telegram track onto a NowPlaying; artwork is the
+    // track's embedded picture as base64 (the mapper expects NowPlaying.artworkBase64).
+    // MutableStateFlow is-a StateFlow, so it satisfies the plugin's read-only param directly.
+    private val snapNowPlaying = MutableStateFlow(NowPlaying.EMPTY)
 
-        override fun onPlay() = runOnMain { mediaSession?.player?.play() }
-        override fun onPause() = runOnMain { mediaSession?.player?.pause() }
-        override fun onSkipNext() {
+    private val snapController = object : PlaybackController {
+        override fun play() = runOnMain { mediaSession?.player?.play() }
+        override fun pause() = runOnMain { mediaSession?.player?.pause() }
+        override fun next() {
             activeTrackRepository.emitCommand(PlaybackCommand.NEXT)
         }
-        override fun onSkipPrev() {
+        override fun previous() {
             activeTrackRepository.emitCommand(PlaybackCommand.PREV)
         }
+        override fun seekTo(positionMs: Long) {} // playlist next/prev only - position not driven here
+    }
+
+    private fun buildSnapNowPlaying(): NowPlaying {
+        val playback = activeTrackRepository.activePlayback.value
+        val canSkip = playback != null
+        return NowPlaying(
+            title = playback?.let { it.track.title ?: it.track.fileName } ?: "",
+            artist = playback?.track?.performer ?: "",
+            album = playback?.chatTitle ?: "",
+            artworkBase64 = playback?.albumArt?.let { Base64.encodeToString(it, Base64.NO_WRAP) },
+            isPlaying = playerIsPlaying,
+            canGoNext = canSkip,
+            canGoPrevious = canSkip,
+        )
+    }
+
+    // Push the current metadata to web players / snapclients. Replaces the old
+    // snapcontrolCallbacks + snapcastManager.notifyPropertiesChanged() flow.
+    private fun publishNowPlaying() {
+        snapNowPlaying.value = buildSnapNowPlaying()
+        snapcastManager.notifyPropertiesChanged()
     }
 
     private fun runOnMain(block: () -> Unit) {
@@ -171,9 +197,9 @@ class PlaybackService : MediaSessionService() {
                     // deadlocks - the 64KB pipe has no reader yet and a blocked
                     // tee stalls READY forever.
                     fifoSink?.enableWrites()
-                    snapcastManager.startBroadcast(snapcontrolCallbacks)
+                    snapcastManager.startBroadcast(snapNowPlaying, snapController)
                 }
-                snapcastManager.notifyPropertiesChanged()
+                publishNowPlaying()
             }
         })
 
@@ -226,7 +252,7 @@ class PlaybackService : MediaSessionService() {
         // Push metadata changes (track/art/play state) to snapserver → web players
         serviceScope.launch {
             activeTrackRepository.activePlayback.collect {
-                snapcastManager.notifyPropertiesChanged()
+                publishNowPlaying()
             }
         }
 
