@@ -942,7 +942,7 @@ private val defaultReactionEmoji = listOf(
 
 @Composable
 private fun ReactionsSheet(
-    info: tech.capullo.telecloudradio.data.telegram.MessageReactionsInfo?,
+    info: tech.capullo.source.telegram.data.telegram.MessageReactionsInfo?,
     isLoading: Boolean,
     onReact: (String) -> Unit,
 ) {

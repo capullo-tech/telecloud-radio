@@ -18,12 +18,8 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
-      # :tdlib is script-populated (NOT a submodule); populate before the traced compile so the
-      # module's sources exist.
-      - name: Populate :tdlib (setup_tdlib.sh)
-        run: |
-          chmod +x scripts/setup_tdlib.sh
-          ./scripts/setup_tdlib.sh
+      # TDLib resolves transitively from the capullo-source-telegram jitpack dependency — no
+      # setup_tdlib.sh / git-lfs step anymore.
       - name: Setup Java
         uses: actions/setup-java@v4
         with:

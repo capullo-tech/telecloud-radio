@@ -59,8 +59,9 @@ android {
 }
 
 dependencies {
-    // TDLib — populated by running ./scripts/setup_tdlib.sh
-    implementation(project(":tdlib"))
+    // TDLib client + models (Layer 3): brings lib-tdlib-android (libtdjni.so + org.drinkless.tdlib)
+    // transitively. Replaces Telecloud's own :tdlib module + TelegramClient/TdLibTelegramClient copies.
+    implementation(libs.capullo.source.telegram)
 
     ksp(libs.hilt.android.compiler)
     ksp(libs.androidx.room.compiler)

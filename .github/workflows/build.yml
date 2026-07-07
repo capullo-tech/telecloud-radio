@@ -24,13 +24,8 @@ jobs:
           distribution: 'temurin'
       - name: Setup Gradle
         uses: gradle/actions/setup-gradle@v4
-      # :tdlib is script-populated (TDLib Java API + prebuilt .so from TGX-Android), NOT a git
-      # submodule -- must run before any Gradle task or the module has no sources. The script's
-      # TGX clone pulls the .so via git-lfs (ubuntu-latest ships git-lfs).
-      - name: Populate :tdlib (setup_tdlib.sh)
-        run: |
-          chmod +x scripts/setup_tdlib.sh
-          ./scripts/setup_tdlib.sh
+      # TDLib (client + prebuilt .so) resolves transitively from the capullo-source-telegram jitpack
+      # dependency (which depends on lib-tdlib-android) — no setup_tdlib.sh / git-lfs step anymore.
       - name: Check spotless
         run: ./gradlew spotlessCheck --no-configuration-cache
       # ubuntu-latest ships the Android SDK. No submodules; lib-snapcast-android resolves from jitpack.
