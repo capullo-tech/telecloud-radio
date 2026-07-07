@@ -63,7 +63,7 @@ import androidx.compose.ui.unit.dp
 import androidx.hilt.lifecycle.viewmodel.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import tech.capullo.audio.snapcast.DiscoveredSnapserver
-import tech.capullo.telecloudradio.data.telegram.TelegramChat
+import tech.capullo.source.telegram.data.telegram.TelegramChat
 import tech.capullo.telecloudradio.ui.snapcast.SnapcastViewModel
 
 @OptIn(ExperimentalMaterial3Api::class)

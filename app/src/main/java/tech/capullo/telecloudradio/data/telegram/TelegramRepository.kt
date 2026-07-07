@@ -8,6 +8,13 @@ import kotlinx.coroutines.flow.SharedFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.launch
+import tech.capullo.source.telegram.data.telegram.AuthState
+import tech.capullo.source.telegram.data.telegram.ChatType
+import tech.capullo.source.telegram.data.telegram.HistoryPage
+import tech.capullo.source.telegram.data.telegram.MessageReactionsInfo
+import tech.capullo.source.telegram.data.telegram.TelegramChat
+import tech.capullo.source.telegram.data.telegram.TelegramClient
+import tech.capullo.source.telegram.data.telegram.TelegramMessage
 import tech.capullo.telecloudradio.data.db.AudioAnalysisDao
 import tech.capullo.telecloudradio.data.db.MediaMessageDao
 import tech.capullo.telecloudradio.data.db.MediaMessageEntity

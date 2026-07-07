@@ -35,5 +35,5 @@ if (file("../capullo-audio").exists()) {
 
 rootProject.name = "TelecloudRadio"
 include(":app")
-// :tdlib is populated by running ./scripts/setup_tdlib.sh
-include(":tdlib")
+// TDLib (client + prebuilt .so) now comes transitively via the capullo-source-telegram jitpack
+// dependency (which depends on lib-tdlib-android), so there's no local :tdlib / setup_tdlib.sh.

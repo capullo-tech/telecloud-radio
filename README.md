@@ -17,16 +17,14 @@ front-end, being recomposed onto the platform's shared libraries:
 
 ## Building
 
-The `:tdlib` module (TDLib Java API + prebuilt native binaries) is populated by
-a script rather than committed:
-
 ```sh
-./scripts/setup_tdlib.sh
 ./gradlew :app:assembleDebug
 ```
 
-You need `git-lfs` installed (the script pulls the prebuilt `.so` binaries from
-[TGX-Android/tdlib](https://github.com/TGX-Android/tdlib) via LFS).
+TDLib (the client + prebuilt `.so`) comes transitively from the
+[`capullo-source-telegram`](https://github.com/capullo-tech/capullo-source-telegram) jitpack
+dependency (which depends on [`lib-tdlib-android`](https://github.com/capullo-tech/lib-tdlib-android)).
+There's nothing to populate - no `setup_tdlib.sh`, no `git-lfs`.
 
 ## License
 

@@ -6,7 +6,7 @@ import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
-import tech.capullo.telecloudradio.data.telegram.TelegramChat
+import tech.capullo.source.telegram.data.telegram.TelegramChat
 import tech.capullo.telecloudradio.data.telegram.TelegramRepository
 import javax.inject.Inject
 
