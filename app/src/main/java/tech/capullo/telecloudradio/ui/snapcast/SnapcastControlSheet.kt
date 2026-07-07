@@ -59,6 +59,7 @@ fun SnapcastControlSheet(
     isBroadcaster: Boolean = false,
     isStreamLocked: Boolean = false,
     onToggleStreamLock: () -> Unit = {},
+    httpPort: Int = tech.capullo.telecloudradio.snapcast.SnapcastPorts.HTTP,
     onDismiss: () -> Unit,
 ) {
     val connectedClients = remember(groups) {
@@ -75,7 +76,7 @@ fun SnapcastControlSheet(
     var showQr by remember { mutableStateOf(false) }
     if (showQr) {
         val ips = remember { usefulLocalIps() }
-        ListenQrDialog(ips = ips, onDismiss = { showQr = false })
+        ListenQrDialog(ips = ips, httpPort = httpPort, onDismiss = { showQr = false })
     }
 
     ModalBottomSheet(

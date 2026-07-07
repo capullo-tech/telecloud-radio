@@ -82,8 +82,8 @@ fun GroupSelectorScreen(
         snapViewModel.startDiscovery()
         onDispose { snapViewModel.stopDiscovery() }
     }
-    val onJoin: (String, Int, String) -> Unit = { host, port, name ->
-        snapViewModel.connect(host, port)
+    val onJoin: (String, Int, Int, String) -> Unit = { host, port, httpPort, name ->
+        snapViewModel.connect(host, port, httpPort)
         onJoinServer(host, port, name)
     }
 
@@ -167,7 +167,7 @@ private fun ChatList(
     chats: List<TelegramChat>,
     servers: List<DiscoveredSnapserver>,
     onSelect: (TelegramChat) -> Unit,
-    onJoin: (host: String, port: Int, name: String) -> Unit,
+    onJoin: (host: String, port: Int, httpPort: Int, name: String) -> Unit,
 ) {
     LazyColumn(modifier = Modifier.fillMaxSize()) {
         item {
@@ -207,7 +207,7 @@ private fun ChatList(
 @Composable
 private fun LocalRadiosSection(
     servers: List<DiscoveredSnapserver>,
-    onJoin: (host: String, port: Int, name: String) -> Unit,
+    onJoin: (host: String, port: Int, httpPort: Int, name: String) -> Unit,
 ) {
     var manualExpanded by remember { mutableStateOf(false) }
     var manualInput by remember { mutableStateOf("") }
@@ -255,7 +255,8 @@ private fun LocalRadiosSection(
                         val host = input.substringBefore(":")
                         val port = input.substringAfter(":", "")
                             .toIntOrNull() ?: tech.capullo.telecloudradio.snapcast.SnapcastPorts.STREAM
-                        onJoin(host, port, host)
+                        // Manual entry can't know the remote's http/control port; assume the default.
+                        onJoin(host, port, tech.capullo.telecloudradio.snapcast.SnapcastPorts.HTTP, host)
                     }
                     OutlinedTextField(
                         value = manualInput,
@@ -278,7 +279,14 @@ private fun LocalRadiosSection(
                 Row(
                     modifier = Modifier
                         .fillMaxWidth()
-                        .clickable { onJoin(server.hostAddress, server.port, server.serviceName.ifBlank { server.hostAddress }) }
+                        .clickable {
+                            onJoin(
+                                server.hostAddress,
+                                server.port,
+                                server.httpPort,
+                                server.serviceName.ifBlank { server.hostAddress },
+                            )
+                        }
                         .padding(horizontal = 16.dp, vertical = 12.dp),
                     verticalAlignment = Alignment.CenterVertically,
                 ) {

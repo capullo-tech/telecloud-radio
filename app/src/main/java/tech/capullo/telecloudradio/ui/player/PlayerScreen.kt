@@ -190,6 +190,7 @@ fun PlayerScreen(
             isBroadcaster = !snapState.isListening,
             isStreamLocked = snapState.isStreamLocked,
             onToggleStreamLock = snapViewModel::toggleStreamLock,
+            httpPort = snapState.broadcastHttpPort,
             onDismiss = { showSnapSheet = false },
         )
     }
