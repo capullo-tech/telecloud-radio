@@ -757,7 +757,10 @@ private fun ControlBar(state: PlayerUiState, viewModel: PlayerViewModel) {
             modifier = Modifier.size(56.dp),
         ) {
             val progress = state.nextDownloadProgress
-            if (!state.nextTrackReady && progress != null) {
+            // Only surface the next-track download once the current track is actually playing —
+            // otherwise the Next button flickers between icon and ring during the initial load/
+            // prefetch churn (the "loading for next song" jumpiness).
+            if (state.isPlaying && !state.nextTrackReady && progress != null) {
                 // Next track still downloading — show its progress instead of the icon
                 CircularProgressIndicator(
                     progress = { progress },

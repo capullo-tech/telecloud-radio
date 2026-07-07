@@ -12,6 +12,7 @@ import androidx.compose.material3.Button
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.OutlinedTextFieldDefaults
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
@@ -78,6 +79,19 @@ fun AuthScreen(onAuthenticated: () -> Unit, viewModel: AuthViewModel = hiltViewM
     }
 }
 
+// High-contrast field colors so the login inputs don't read as disabled under the (wallpaper-derived)
+// dynamic dark scheme, whose default outline/label can be nearly invisible on the dark background.
+@Composable
+private fun authTextFieldColors() = OutlinedTextFieldDefaults.colors(
+    focusedBorderColor = MaterialTheme.colorScheme.primary,
+    unfocusedBorderColor = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.55f),
+    focusedLabelColor = MaterialTheme.colorScheme.primary,
+    unfocusedLabelColor = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.7f),
+    focusedTextColor = MaterialTheme.colorScheme.onSurface,
+    unfocusedTextColor = MaterialTheme.colorScheme.onSurface,
+    cursorColor = MaterialTheme.colorScheme.primary,
+)
+
 @Composable
 private fun CredentialsForm(onSubmit: (apiId: String, apiHash: String) -> Unit) {
     var apiId by remember { mutableStateOf("") }
@@ -106,6 +120,7 @@ private fun CredentialsForm(onSubmit: (apiId: String, apiHash: String) -> Unit) 
             onValueChange = { apiId = it },
             label = { Text("API ID") },
             keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+            colors = authTextFieldColors(),
             singleLine = true,
             modifier = Modifier.fillMaxWidth(),
         )
@@ -113,6 +128,7 @@ private fun CredentialsForm(onSubmit: (apiId: String, apiHash: String) -> Unit) 
             value = apiHash,
             onValueChange = { apiHash = it },
             label = { Text("API Hash") },
+            colors = authTextFieldColors(),
             singleLine = true,
             modifier = Modifier.fillMaxWidth(),
         )
@@ -139,6 +155,7 @@ private fun PhoneInputForm(onSubmit: (String) -> Unit) {
             onValueChange = { phone = it },
             label = { Text("Phone number (e.g. +1234567890)") },
             keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Phone),
+            colors = authTextFieldColors(),
             singleLine = true,
             modifier = Modifier.fillMaxWidth(),
         )
@@ -167,6 +184,7 @@ private fun PasswordInputForm(onSubmit: (String) -> Unit) {
             label = { Text("Password") },
             visualTransformation = PasswordVisualTransformation(),
             keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password),
+            colors = authTextFieldColors(),
             singleLine = true,
             modifier = Modifier.fillMaxWidth(),
         )
@@ -194,6 +212,7 @@ private fun CodeInputForm(onSubmit: (String) -> Unit) {
             onValueChange = { code = it },
             label = { Text("Code") },
             keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+            colors = authTextFieldColors(),
             singleLine = true,
             modifier = Modifier.fillMaxWidth(),
         )

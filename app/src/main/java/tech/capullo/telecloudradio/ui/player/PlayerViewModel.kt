@@ -256,6 +256,20 @@ class PlayerViewModel @Inject constructor(
             } else {
                 playlistRepository.loadLocalPlaylist(chatId)
             }
+            if (orderedPlaylist.isEmpty() && isOnline) {
+                // Auto-open can land on a station whose library hasn't been synced yet (a fresh or
+                // cleared DB with a remembered last group): it skips the group-tap sync. Sync it now
+                // the same way the group tap does — look the chat up (for its real type) and fetch
+                // its audio history — before giving up, so auto-open doesn't dead-end on the empty
+                // "No audio tracks found" screen.
+                _uiState.value = PlayerUiState(isLoading = true)
+                val chat = runCatching { telegramRepository.getAudioGroups(200) }
+                    .getOrNull()?.find { it.id == chatId }
+                if (chat != null) {
+                    runCatching { telegramRepository.syncAudioMessages(chat) }
+                    orderedPlaylist = playlistRepository.loadPlaylist(chatId)
+                }
+            }
             if (orderedPlaylist.isEmpty()) {
                 basePlaylist = emptyList()
                 playlist = emptyList()
