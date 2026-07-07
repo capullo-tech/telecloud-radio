@@ -19,7 +19,11 @@ class SnapcastViewModel @Inject constructor(
     fun startDiscovery() = snapcastManager.discovery.startDiscovery()
     fun stopDiscovery() = snapcastManager.discovery.stopDiscovery()
 
-    fun connect(host: String, port: Int = tech.capullo.telecloudradio.snapcast.SnapcastPorts.STREAM) = snapcastManager.connectListen(host, port)
+    fun connect(
+        host: String,
+        port: Int = tech.capullo.telecloudradio.snapcast.SnapcastPorts.STREAM,
+        httpPort: Int = tech.capullo.telecloudradio.snapcast.SnapcastPorts.HTTP,
+    ) = snapcastManager.connectListen(host, port, httpPort)
     fun disconnect() = snapcastManager.disconnectListen()
 
     fun setClientVolume(clientId: String, percent: Int, muted: Boolean) = snapcastManager.adjustClientVolume(clientId, percent, muted)

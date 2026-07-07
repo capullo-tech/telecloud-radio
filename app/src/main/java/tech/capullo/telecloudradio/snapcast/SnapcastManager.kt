@@ -30,6 +30,7 @@ import tech.capullo.audio.snapcast.SnapclientProcess
 import tech.capullo.audio.snapcast.SnapcontrolPlugin
 import tech.capullo.audio.snapcast.SnapserverDiscoveryManager
 import tech.capullo.audio.snapcast.SnapserverNsdRegistrar
+import tech.capullo.audio.snapcast.SnapserverPorts
 import tech.capullo.audio.snapcast.SnapserverProcess
 import tech.capullo.audio.snapcast.StreamOnProperties
 import tech.capullo.audio.snapcast.StreamPlayerProperties
@@ -74,6 +75,8 @@ class SnapcastManager @Inject constructor(
         val snapclientChannel: String = "stereo",
         /** Broadcaster stream-control lock (blocks web/remote transport). */
         val isStreamLocked: Boolean = false,
+        /** This broadcaster's resolved HTTP (web player + control) port — for the listen-in QR URL. */
+        val broadcastHttpPort: Int = SnapcastPorts.HTTP,
     ) {
         val isListening: Boolean get() = listenHost.isNotEmpty()
     }
@@ -118,7 +121,9 @@ class SnapcastManager @Inject constructor(
      */
     fun prepareBroadcast(): String {
         stopBroadcast()
-        return SnapserverProcess(context, STREAM_NAME, SnapcastPorts.asSnapserverPorts)
+        // OS-assigned ports so multiple capullo apps coexist and the ports aren't a fixed guess.
+        // The resolved trio is read back off snapserver.ports to wire the snapclient / NSD / control.
+        return SnapserverProcess(context, STREAM_NAME, SnapserverPorts.free())
             .also { snapserverProcess = it }.pipeFilepath
     }
 
@@ -132,8 +137,9 @@ class SnapcastManager @Inject constructor(
         // Lazily recreated after a listen-in session tore the stack down; the
         // FIFO file is reused so the tee sink's open write end stays valid.
         val snapserver = snapserverProcess
-            ?: SnapserverProcess(context, STREAM_NAME, SnapcastPorts.asSnapserverPorts)
+            ?: SnapserverProcess(context, STREAM_NAME, SnapserverPorts.free())
                 .also { snapserverProcess = it }
+        val ports = snapserver.ports
         Log.d(TAG, "Starting broadcast stack")
         // Plugin must be listening before snapserver spawns libsnapcontrol.so. The engine's
         // SnapcontrolPlugin is contract-driven: a StateFlow<NowPlaying> (read) + a PlaybackController
@@ -144,11 +150,11 @@ class SnapcastManager @Inject constructor(
                 it.start()
             }
         snapserverJob = scope.launch { snapserver.start() }
-        startLocalSnapclient("localhost", SnapcastPorts.STREAM)
+        startLocalSnapclient("localhost", ports.streamPort)
         nsdRegistrar = SnapserverNsdRegistrar(context)
-            .also { it.start("", SnapcastPorts.STREAM, SnapcastPorts.TCP) }
-        startControl("localhost")
-        _state.update { it.copy(isBroadcasting = true) }
+            .also { it.start("", ports.streamPort, ports.tcpPort, ports.httpPort) }
+        startControl("localhost", ports.httpPort)
+        _state.update { it.copy(isBroadcasting = true, broadcastHttpPort = ports.httpPort) }
     }
 
     fun notifyPropertiesChanged() {
@@ -189,8 +195,12 @@ class SnapcastManager @Inject constructor(
 
     // --- Listen-in side ---
 
-    fun connectListen(host: String, port: Int = SnapcastPorts.STREAM) {
-        Log.d(TAG, "Listen-in → $host:$port")
+    fun connectListen(
+        host: String,
+        port: Int = SnapcastPorts.STREAM,
+        httpPort: Int = SnapcastPorts.HTTP,
+    ) {
+        Log.d(TAG, "Listen-in → $host:$port (control :$httpPort)")
         stopBroadcast()
         stopLocalSnapclient()
         stopControl()
@@ -206,7 +216,7 @@ class SnapcastManager @Inject constructor(
             )
         }
         startLocalSnapclient(host, port)
-        startControl(host)
+        startControl(host, httpPort)
     }
 
     fun disconnectListen() {
@@ -376,9 +386,9 @@ class SnapcastManager @Inject constructor(
         audioFocus?.abandon()
     }
 
-    private fun startControl(host: String) {
+    private fun startControl(host: String, httpPort: Int) {
         stopControl()
-        val client = SnapcastControlClient(host, SnapcastPorts.HTTP).also { controlClient = it }
+        val client = SnapcastControlClient(host, httpPort).also { controlClient = it }
         controlJob = scope.launch {
             client.initialize()
             client.notifications.collect { notif ->
