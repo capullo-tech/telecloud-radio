@@ -35,6 +35,7 @@ import tech.capullo.audio.snapcast.SnapserverProcess
 import tech.capullo.audio.snapcast.StreamOnProperties
 import tech.capullo.audio.snapcast.StreamPlayerProperties
 import tech.capullo.audio.snapcast.Volume
+import tech.capullo.telecloudradio.data.SettingsRepository
 import javax.inject.Inject
 import javax.inject.Singleton
 
@@ -54,6 +55,7 @@ import javax.inject.Singleton
 @Singleton
 class SnapcastManager @Inject constructor(
     @ApplicationContext private val context: Context,
+    private val settingsRepository: SettingsRepository,
 ) {
 
     data class SnapcastState(
@@ -90,6 +92,34 @@ class SnapcastManager @Inject constructor(
     val localClientId: String get() = SnapclientProcess.localHostId(context)
 
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+
+    // Own snapclient vol/latency restore + persist (spatial-role memory). savedVol/savedLat are
+    // refreshed from settings at each (re)connect; volLatRestored gates persistence until the server
+    // reflects the restored values, so the connect-time default can't be persisted over saved.
+    private var savedVol = 100
+    private var savedLat = 0
+    private var volLatRestored = false
+    private var volLatApplied = false
+    private var lastPersistedVol = -1
+    private var lastPersistedLat = Int.MIN_VALUE
+
+    init {
+        // Persist own client's volume/latency on ANY change (slider, knob, remote controller).
+        scope.launch {
+            _state.collect { s ->
+                if (!volLatRestored) return@collect
+                val localId = localClientId.takeIf { it.isNotEmpty() } ?: return@collect
+                val own = s.groups.flatMap { it.clients }
+                    .find { it.id == localId || it.id.contains(localId) } ?: return@collect
+                if (own.config.volume.percent != lastPersistedVol || own.config.latency != lastPersistedLat) {
+                    lastPersistedVol = own.config.volume.percent
+                    lastPersistedLat = own.config.latency
+                    settingsRepository.snapclientVolume = lastPersistedVol
+                    settingsRepository.snapclientLatency = lastPersistedLat
+                }
+            }
+        }
+    }
 
     // --- Broadcast side ---
 
@@ -267,6 +297,7 @@ class SnapcastManager @Inject constructor(
     fun setLocalChannel(channel: String) {
         _state.update { it.copy(snapclientChannel = channel) }
         snapclientProcess?.setChannel(channel)
+        settingsRepository.snapclientChannel = channel
         val localId = localClientId.takeIf { it.isNotEmpty() } ?: return
         renameClientWithChannel(localId, channel)
     }
@@ -278,6 +309,7 @@ class SnapcastManager @Inject constructor(
         if (clientId == localClientId || clientId.contains(localClientId) || localClientId.contains(clientId)) {
             _state.update { it.copy(snapclientChannel = channel) }
             snapclientProcess?.setChannel(channel)
+            settingsRepository.snapclientChannel = channel
         }
     }
 
@@ -336,6 +368,13 @@ class SnapcastManager @Inject constructor(
         currentSnapclientHost = host
         currentSnapclientPort = port
         localChannelTagSet = false
+        // Restore this device's saved spatial role for the new connection: channel seeds the initial
+        // tag; volume/latency are re-applied once the client appears (restoreOwnVolLat).
+        volLatRestored = false
+        volLatApplied = false
+        savedVol = settingsRepository.snapclientVolume
+        savedLat = settingsRepository.snapclientLatency
+        _state.update { it.copy(snapclientChannel = settingsRepository.snapclientChannel) }
         launchSnapclientProcess(host, port)
         // Request audio focus so the foreground app owns the speaker. On loss the local snapclient is
         // stopped (broadcast continues); on regain it's restarted with the same host/port.
@@ -460,6 +499,7 @@ class SnapcastManager @Inject constructor(
         mergeGroupsIfNeeded(groups)
         maybeSetInitialChannelTag(groups)
         syncLocalChannelFromName(groups)
+        restoreOwnVolLat(groups)
         // Read the active stream's properties on connect so listen-in now-playing
         // shows immediately instead of waiting for the next OnProperties push
         if (_state.value.isListening) {
@@ -530,6 +570,31 @@ class SnapcastManager @Inject constructor(
         if (newChannel != _state.value.snapclientChannel) {
             _state.update { it.copy(snapclientChannel = newChannel) }
             snapclientProcess?.setChannel(newChannel)
+            settingsRepository.snapclientChannel = newChannel
+        }
+    }
+
+    // Restore this device's saved volume/latency onto its own snapclient on connect; persistence is
+    // handled by the init collector. Gated by volLatRestored — set only once the server reflects the
+    // saved values — so the transient connect-time default can't be persisted over saved.
+    private fun restoreOwnVolLat(groups: List<Group>) {
+        if (volLatRestored) return
+        val localId = localClientId.takeIf { it.isNotEmpty() } ?: return
+        val own = groups.flatMap { it.clients }
+            .find { it.id == localId || it.id.contains(localId) } ?: return
+        val vol = own.config.volume.percent
+        val lat = own.config.latency
+        if (vol == savedVol && lat == savedLat) {
+            volLatRestored = true
+            lastPersistedVol = vol
+            lastPersistedLat = lat
+        } else if (!volLatApplied) {
+            volLatApplied = true
+            scope.launch {
+                controlClient?.sendSetVolume(own.id, own.config.volume.muted, savedVol)
+                controlClient?.sendSetLatency(own.id, savedLat)
+                controlClient?.sendGetStatus()
+            }
         }
     }
 

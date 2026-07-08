@@ -85,4 +85,24 @@ class SettingsRepository @Inject constructor(@ApplicationContext context: Contex
         prefs.edit().putFloat("balance", clamped).apply()
         _balance.value = clamped
     }
+
+    // This device's own snapclient spatial role — persisted so a set-once L/R + latency + volume
+    // arrangement survives a restart. Defaults = today's behaviour (stereo / 100% / 0ms).
+    var snapclientChannel: String
+        get() = prefs.getString("snapclient_channel", "stereo") ?: "stereo"
+        set(value) {
+            prefs.edit().putString("snapclient_channel", value).apply()
+        }
+
+    var snapclientVolume: Int
+        get() = prefs.getInt("snapclient_volume", 100)
+        set(value) {
+            prefs.edit().putInt("snapclient_volume", value.coerceIn(0, 100)).apply()
+        }
+
+    var snapclientLatency: Int
+        get() = prefs.getInt("snapclient_latency", 0)
+        set(value) {
+            prefs.edit().putInt("snapclient_latency", value).apply()
+        }
 }
