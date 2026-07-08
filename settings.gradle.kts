@@ -29,6 +29,8 @@ if (file("../capullo-audio").exists()) {
         dependencySubstitution {
             substitute(module("com.github.capullo-tech:capullo-audio"))
                 .using(project(":capullo-audio"))
+            substitute(module("com.github.capullo-tech:capullo-audio-ui"))
+                .using(project(":capullo-audio-ui"))
         }
     }
 }
