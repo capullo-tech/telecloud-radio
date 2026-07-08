@@ -97,6 +97,7 @@ dependencies {
     // SnapclientProcess, SnapcastControlClient, SnapcontrolPlugin, FIFO sink, BalanceAudioProcessor
     // (re-exports capullo-audio-contracts as api). Brings lib-snapcast-android + ktor transitively.
     implementation(libs.capullo.audio)
+    implementation(libs.capullo.audio.ui) // shared control sheet + QR dialog
 
     // Snapcast multiroom broadcast: native snapserver/snapclient binaries +
     // ktor WebSocket client for the Snapcast JSON-RPC control API

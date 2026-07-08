@@ -147,7 +147,7 @@ import tech.capullo.telecloudradio.data.db.AudioAnalysisEntity
 import tech.capullo.telecloudradio.data.db.MediaMessageEntity
 import tech.capullo.telecloudradio.player.AudioMetadata
 import tech.capullo.telecloudradio.snapcast.SnapcastManager
-import tech.capullo.telecloudradio.ui.snapcast.SnapcastControlSheet
+import tech.capullo.audio.ui.SnapcastControlSheet
 import tech.capullo.telecloudradio.ui.snapcast.SnapcastViewModel
 import java.io.File
 import java.nio.ByteBuffer
