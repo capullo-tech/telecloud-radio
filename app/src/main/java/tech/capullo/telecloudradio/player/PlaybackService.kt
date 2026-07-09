@@ -305,6 +305,10 @@ class PlaybackService : MediaSessionService() {
 
     override fun onDestroy() {
         serviceScope.cancel()
+        // Playback is genuinely over (service torn down) → drop the active-playback state so the
+        // MiniPlayer disappears. This is the correct clear point; on mere back-navigation the
+        // service stays alive (AppViewModel keeps a MediaController bound), so this won't fire.
+        activeTrackRepository.clear()
         snapcastManager.stopBroadcast()
         snapcastManager.disconnectListen()
         fifoSink?.close()
