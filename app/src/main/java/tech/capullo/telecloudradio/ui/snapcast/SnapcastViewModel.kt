@@ -36,6 +36,10 @@ class SnapcastViewModel @Inject constructor(
 
     fun toggleStreamLock() = snapcastManager.toggleStreamLock()
 
+    fun resetSelf() = snapcastManager.resetSelf()
+
+    fun resetAll() = snapcastManager.resetAll()
+
     /** Transport control of the remote stream while listening in. */
     fun streamControl(command: String) = snapcastManager.sendStreamControl(command)
 }

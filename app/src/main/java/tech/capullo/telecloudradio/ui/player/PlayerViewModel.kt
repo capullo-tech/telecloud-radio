@@ -1052,7 +1052,10 @@ class PlayerViewModel @Inject constructor(
         sleepTimerJob?.cancel()
         controller?.release()
         controller = null
-        activeTrackRepository.clear()
+        // Do NOT clear activePlayback here. This VM is scoped to the Player nav entry, so it is
+        // destroyed on back-navigation to the station selector - clearing here made the MiniPlayer
+        // vanish the moment you left the player. activePlayback is app-scoped state that must
+        // outlive this screen; it is cleared when playback truly stops (PlaybackService.onDestroy).
         super.onCleared()
     }
 }

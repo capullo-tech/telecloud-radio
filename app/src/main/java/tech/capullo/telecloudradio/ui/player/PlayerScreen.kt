@@ -4,6 +4,8 @@ package tech.capullo.telecloudradio.ui.player
 
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
+import androidx.activity.ComponentActivity
+import androidx.activity.compose.LocalActivity
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
@@ -164,7 +166,16 @@ fun PlayerScreen(
     chatTitle: String,
     onSettings: () -> Unit,
     onBack: () -> Unit,
-    viewModel: PlayerViewModel = hiltViewModel(),
+    // Activity-scoped (NOT the default nav-entry scope): this VM owns the playback command
+    // handler (activeTrackRepository.command → next/prev) + the playlist + the MediaController.
+    // Scoping it to the entry meant back-navigation destroyed it, which both wiped the MiniPlayer
+    // and left the MiniPlayer/notification skip buttons with no listener. Activity scope keeps the
+    // one playback session alive across navigation for the whole app session. (Only PlayerViewModel
+    // needs to survive; snapViewModel stays entry-scoped - it's a thin pass-through to the singleton
+    // SnapcastManager.)
+    viewModel: PlayerViewModel = hiltViewModel(
+        viewModelStoreOwner = LocalActivity.current as ComponentActivity,
+    ),
     snapViewModel: SnapcastViewModel = hiltViewModel(),
 ) {
     val uiState by viewModel.uiState.collectAsStateWithLifecycle()
@@ -190,6 +201,9 @@ fun PlayerScreen(
             isBroadcaster = !snapState.isListening,
             isStreamLocked = snapState.isStreamLocked,
             onToggleStreamLock = snapViewModel::toggleStreamLock,
+            localClientId = snapViewModel.localClientId,
+            onResetSelf = snapViewModel::resetSelf,
+            onResetAll = snapViewModel::resetAll,
             httpPort = snapState.broadcastHttpPort,
             onDismiss = { showSnapSheet = false },
         )
