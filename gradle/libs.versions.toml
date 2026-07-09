@@ -18,7 +18,7 @@ zxing = "3.5.3"
 # capullo-audio (Layer 2, the delivery engine) - the recompose consumes its public transport classes
 # (SnapserverProcess/SnapclientProcess/SnapcastControlClient/SnapcontrolPlugin/FIFO/BalanceAudioProcessor).
 # Pinned to an immutable jitpack commit (main-SNAPSHOT serves stale artifacts -> a CI trap).
-capulloAudio = "aaece3a"
+capulloAudio = "fc5883e"
 # capullo-source-telegram (Layer 3) - the TDLib client + models. Brings lib-tdlib-android
 # (libtdjni.so + org.drinkless.tdlib) transitively, replacing Telecloud's own :tdlib + client copies.
 capulloSourceTelegram = "d16d9f2"
@@ -75,9 +75,13 @@ ktor-client-okhttp = { module = "io.ktor:ktor-client-okhttp", version.ref = "kto
 ktor-client-websockets = { module = "io.ktor:ktor-client-websockets", version.ref = "ktor" }
 ktor-serialization-kotlinx-json = { module = "io.ktor:ktor-serialization-kotlinx-json", version.ref = "ktor" }
 lib-snapcast-android = { module = "com.github.capullo-tech.lib-snapcast-android:lib-snapcast-android", version.ref = "snapcast" }
-capullo-audio = { module = "com.github.capullo-tech:capullo-audio", version.ref = "capulloAudio" }
+# jitpack multi-module coords: the engine (module name == repo name) is served flat AND nested;
+# capullo-audio-ui (a non-repo-name module) is ONLY at the nested group com.github.capullo-tech.capullo-audio.
+# Both must use the SAME (nested) group or Gradle sees the engine twice (flat direct + nested transitive
+# via -ui) and fails on duplicate classes.
+capullo-audio = { module = "com.github.capullo-tech.capullo-audio:capullo-audio", version.ref = "capulloAudio" }
 # Shared client Compose UI (control sheet, QR dialog) - same repo/commit as the engine.
-capullo-audio-ui = { module = "com.github.capullo-tech:capullo-audio-ui", version.ref = "capulloAudio" }
+capullo-audio-ui = { module = "com.github.capullo-tech.capullo-audio:capullo-audio-ui", version.ref = "capulloAudio" }
 capullo-source-telegram = { module = "com.github.capullo-tech:capullo-source-telegram", version.ref = "capulloSourceTelegram" }
 zxing-core = { module = "com.google.zxing:core", version.ref = "zxing" }
 kotlinx-coroutines-test = { group = "org.jetbrains.kotlinx", name = "kotlinx-coroutines-test", version.ref = "kotlinxCoroutinesAndroid" }
