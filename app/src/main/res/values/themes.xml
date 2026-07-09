@@ -1,3 +1,9 @@
-<resources>
-    <style name="Theme.TelecloudRadio" parent="android:Theme.Material.Light.NoActionBar" />
+<resources xmlns:tools="http://schemas.android.com/tools">
+    <style name="Theme.TelecloudRadio" parent="android:Theme.Material.Light.NoActionBar">
+        <!-- Android 12+ system splash: paint the launch window the launcher-icon
+             background colour. TC's ic_launcher is a white mark on a solid black
+             field (no adaptive-icon background layer), so the splash is black -
+             kills the bare default square and matches the icon. -->
+        <item name="android:windowSplashScreenBackground" tools:targetApi="31">#000000</item>
+    </style>
 </resources>
