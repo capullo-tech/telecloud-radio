@@ -7,6 +7,7 @@ import android.graphics.BitmapFactory
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.LocalActivity
 import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.core.animateDpAsState
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.animation.scaleIn
@@ -66,6 +67,7 @@ import androidx.compose.material.icons.filled.ShowChart
 import androidx.compose.material.icons.filled.Shuffle
 import androidx.compose.material.icons.filled.SkipNext
 import androidx.compose.material.icons.filled.SkipPrevious
+import androidx.compose.material.icons.filled.Snooze
 import androidx.compose.material.icons.filled.Speed
 import androidx.compose.material.icons.filled.Storage
 import androidx.compose.material.icons.filled.SurroundSound
@@ -74,7 +76,6 @@ import androidx.compose.material.icons.filled.WifiOff
 import androidx.compose.material.icons.outlined.AddReaction
 import androidx.compose.material.icons.outlined.Analytics
 import androidx.compose.material.icons.outlined.AudioFile
-import androidx.compose.material.icons.outlined.Bedtime
 import androidx.compose.material.icons.outlined.DataObject
 import androidx.compose.material.icons.outlined.FilterAlt
 import androidx.compose.material.icons.outlined.Report
@@ -122,6 +123,7 @@ import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.blur
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.asImageBitmap
@@ -187,6 +189,13 @@ fun PlayerScreen(
     val listenIn = chatId == LISTEN_IN_CHAT_ID || snapState.isListening
 
     var showSnapSheet by remember { mutableStateOf(false) }
+    // Blur the screen content behind the snapcast sheet, matching the web player's
+    // `backdrop-filter: blur` overlay (the sheet is a separate window and stays sharp;
+    // it darkens the backdrop via its own scrim).
+    val snapBackdropBlur by animateDpAsState(
+        targetValue = if (showSnapSheet) 12.dp else 0.dp,
+        label = "snapBackdropBlur",
+    )
     if (showSnapSheet) {
         SnapcastControlSheet(
             groups = snapState.groups,
@@ -210,18 +219,20 @@ fun PlayerScreen(
     }
 
     if (listenIn) {
-        ListenInPlayer(
-            state = snapState,
-            fallbackTitle = chatTitle,
-            localClientId = snapViewModel.localClientId,
-            onBack = onBack,
-            onControl = snapViewModel::streamControl,
-            onOpenClients = { showSnapSheet = true },
-            onLeave = {
-                snapViewModel.disconnect()
-                onBack()
-            },
-        )
+        Box(Modifier.fillMaxSize().blur(snapBackdropBlur)) {
+            ListenInPlayer(
+                state = snapState,
+                fallbackTitle = chatTitle,
+                localClientId = snapViewModel.localClientId,
+                onBack = onBack,
+                onControl = snapViewModel::streamControl,
+                onOpenClients = { showSnapSheet = true },
+                onLeave = {
+                    snapViewModel.disconnect()
+                    onBack()
+                },
+            )
+        }
         return
     }
 
@@ -233,6 +244,7 @@ fun PlayerScreen(
     }
 
     Scaffold(
+        modifier = Modifier.blur(snapBackdropBlur),
         snackbarHost = { SnackbarHost(snackbarHostState) },
         topBar = {
             TopAppBar(
@@ -252,15 +264,26 @@ fun PlayerScreen(
                     IconButton(onClick = viewModel::toggleSleepTimer) {
                         if (uiState.sleepTimerActive) {
                             val remaining = uiState.sleepTimerSecondsRemaining
+                            val m = remaining / 60
+                            val s = remaining % 60
                             Text(
-                                // 0 remaining = countdown done, finishing the current track
-                                if (remaining > 0) "%d:%02d".format(remaining / 60, remaining % 60) else "zZ",
+                                // Match QC's countdown format (m:ss, or "Ns" under a minute);
+                                // 0 remaining = countdown done, finishing the current track ("zZ").
+                                text = when {
+                                    remaining <= 0 -> "zZ"
+                                    m > 0 -> "$m:${s.toString().padStart(2, '0')}"
+                                    else -> "${s}s"
+                                },
                                 style = MaterialTheme.typography.labelSmall,
                                 fontWeight = FontWeight.Bold,
                                 color = MaterialTheme.colorScheme.primary,
                             )
                         } else {
-                            Icon(Icons.Outlined.Bedtime, contentDescription = "Sleep timer")
+                            Icon(
+                                Icons.Default.Snooze,
+                                contentDescription = "Sleep timer",
+                                tint = MaterialTheme.colorScheme.onSurface,
+                            )
                         }
                     }
                     IconButton(onClick = onSettings) {
