@@ -1,10 +1,13 @@
 package tech.capullo.telecloudradio
 
+import android.graphics.Color
 import android.os.Bundle
 import androidx.activity.ComponentActivity
+import androidx.activity.SystemBarStyle
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import androidx.compose.foundation.isSystemInDarkTheme
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.getValue
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import dagger.hilt.android.AndroidEntryPoint
@@ -38,9 +41,31 @@ class MainActivity : ComponentActivity() {
                 ThemeMode.DARK -> true
                 ThemeMode.LIGHT -> false
             }
+            // Drive system-bar icon appearance off the in-app theme, not the OS night mode:
+            // enableEdgeToEdge()'s default detectDarkMode reads Configuration.uiMode, so forcing the
+            // app dark while the phone is in light mode left dark-on-dark (invisible) status icons.
+            DisposableEffect(darkTheme) {
+                enableEdgeToEdge(
+                    statusBarStyle = SystemBarStyle.auto(
+                        Color.TRANSPARENT,
+                        Color.TRANSPARENT,
+                    ) { darkTheme },
+                    navigationBarStyle = SystemBarStyle.auto(
+                        lightScrim,
+                        darkScrim,
+                    ) { darkTheme },
+                )
+                onDispose {}
+            }
             TelecloudRadioTheme(darkTheme = darkTheme) {
                 AppNavHost()
             }
         }
+    }
+
+    private companion object {
+        // Scrims matching the framework defaults enableEdgeToEdge() uses for the 3-button nav bar.
+        private val lightScrim = Color.argb(0xe6, 0xff, 0xff, 0xff)
+        private val darkScrim = Color.argb(0x80, 0x1b, 0x1b, 0x1b)
     }
 }
