@@ -424,16 +424,6 @@ class SnapcastManager @Inject constructor(
         focus.request()
     }
 
-    /**
-     * Re-assert audio focus for the local snapclient — call when the app returns to the foreground so
-     * the focused app reclaims the speaker. Delegates to the shared controller: a no-op unless the
-     * local snapclient was paused by a focus loss, in which case it reclaims focus and relaunches the
-     * snapclient (via the onResume callback wired in [startLocalSnapclient]).
-     */
-    fun refocusLocalAudio() {
-        audioFocus?.refocus()
-    }
-
     private fun launchSnapclientProcess(host: String, port: Int) {
         val channel = _state.value.snapclientChannel
         val sc = SnapclientProcess(context).also { snapclientProcess = it }
