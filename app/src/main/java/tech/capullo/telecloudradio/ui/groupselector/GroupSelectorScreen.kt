@@ -1,5 +1,6 @@
 package tech.capullo.telecloudradio.ui.groupselector
 
+import android.graphics.BitmapFactory
 import androidx.activity.compose.BackHandler
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.core.LinearEasing
@@ -9,10 +10,13 @@ import androidx.compose.animation.core.infiniteRepeatable
 import androidx.compose.animation.core.rememberInfiniteTransition
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.Canvas
+import androidx.compose.foundation.Image
+import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
@@ -22,6 +26,7 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
@@ -29,6 +34,7 @@ import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.DeviceHub
 import androidx.compose.material.icons.filled.ExpandLess
 import androidx.compose.material.icons.filled.ExpandMore
+import androidx.compose.material.icons.filled.Groups
 import androidx.compose.material3.Button
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
@@ -51,14 +57,18 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.drawscope.rotate
+import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.input.KeyboardType
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.hilt.lifecycle.viewmodel.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
@@ -71,6 +81,7 @@ import tech.capullo.telecloudradio.ui.snapcast.SnapcastViewModel
 fun GroupSelectorScreen(
     onGroupSelected: (chatId: Long, chatTitle: String) -> Unit,
     onJoinServer: (host: String, port: Int, name: String) -> Unit,
+    bottomContentPadding: Dp = 0.dp,
     viewModel: GroupSelectorViewModel = hiltViewModel(),
     snapViewModel: SnapcastViewModel = hiltViewModel(),
 ) {
@@ -126,6 +137,7 @@ fun GroupSelectorScreen(
                 is GroupSelectorUiState.Loaded -> ChatList(
                     chats = state.chats,
                     servers = servers,
+                    bottomContentPadding = bottomContentPadding,
                     onSelect = viewModel::selectGroup,
                     onJoin = onJoin,
                 )
@@ -166,10 +178,14 @@ fun GroupSelectorScreen(
 private fun ChatList(
     chats: List<TelegramChat>,
     servers: List<DiscoveredSnapserver>,
+    bottomContentPadding: Dp,
     onSelect: (TelegramChat) -> Unit,
     onJoin: (host: String, port: Int, httpPort: Int, name: String) -> Unit,
 ) {
-    LazyColumn(modifier = Modifier.fillMaxSize()) {
+    LazyColumn(
+        modifier = Modifier.fillMaxSize(),
+        contentPadding = PaddingValues(bottom = bottomContentPadding),
+    ) {
         item {
             LocalRadiosSection(servers = servers, onJoin = onJoin)
         }
@@ -185,6 +201,7 @@ private fun ChatList(
         } else {
             items(chats) { chat ->
                 ListItem(
+                    leadingContent = { ChatAvatar(chat) },
                     headlineContent = { Text(chat.title) },
                     supportingContent = {
                         Text(
@@ -198,6 +215,37 @@ private fun ChatList(
                 HorizontalDivider()
             }
         }
+    }
+}
+
+// Telegram group/channel avatar: the inline minithumbnail (a small blurred JPEG that ships with
+// the chat, so no download is needed) clipped to a circle; a generic group icon when the chat has
+// no photo or the bytes don't decode.
+@Composable
+private fun ChatAvatar(chat: TelegramChat) {
+    val bitmap = remember(chat.photo) {
+        chat.photo?.let { BitmapFactory.decodeByteArray(it, 0, it.size)?.asImageBitmap() }
+    }
+    if (bitmap != null) {
+        Image(
+            bitmap = bitmap,
+            contentDescription = null,
+            contentScale = ContentScale.Crop,
+            modifier = Modifier
+                .size(40.dp)
+                .clip(CircleShape),
+        )
+    } else {
+        Icon(
+            Icons.Default.Groups,
+            contentDescription = null,
+            tint = MaterialTheme.colorScheme.onSurfaceVariant,
+            modifier = Modifier
+                .size(40.dp)
+                .clip(CircleShape)
+                .background(MaterialTheme.colorScheme.surfaceVariant)
+                .padding(8.dp),
+        )
     }
 }
 

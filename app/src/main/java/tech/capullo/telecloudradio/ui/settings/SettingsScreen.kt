@@ -44,6 +44,7 @@ import androidx.lifecycle.viewModelScope
 import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.launch
+import tech.capullo.telecloudradio.MiniPlayerHeight
 import tech.capullo.telecloudradio.data.SettingsRepository
 import tech.capullo.telecloudradio.data.ThemeMode
 import tech.capullo.telecloudradio.data.db.StationInfo
@@ -94,6 +95,12 @@ class SettingsViewModel @Inject constructor(
             settings.sleepTimerMinutes = value
         }
 
+    var stationLimit: Int
+        get() = settings.stationLimit
+        set(value) {
+            settings.stationLimit = value
+        }
+
     val themeMode: StateFlow<ThemeMode> = settings.themeMode
     fun setThemeMode(mode: ThemeMode) = settings.setThemeMode(mode)
 
@@ -141,7 +148,7 @@ fun SettingsScreen(
                 .verticalScroll(rememberScrollState())
                 .padding(horizontal = 20.dp, vertical = 16.dp)
                 // Keep the last section clear of the mini-player overlay
-                .padding(bottom = 72.dp),
+                .padding(bottom = MiniPlayerHeight),
             verticalArrangement = Arrangement.spacedBy(8.dp),
         ) {
             Text("Download buffer", style = MaterialTheme.typography.titleMedium)
@@ -196,6 +203,37 @@ fun SettingsScreen(
                 label = { Text("Minutes") },
                 isError = sleepError,
                 supportingText = if (sleepError) ({ Text("Enter a positive whole number") }) else null,
+                singleLine = true,
+                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+                modifier = Modifier.width(160.dp),
+            )
+
+            HorizontalDivider(modifier = Modifier.padding(vertical = 8.dp))
+
+            Text("Stations", style = MaterialTheme.typography.titleMedium)
+            Text(
+                "How many Telegram groups and channels to list on the station-select screen. " +
+                    "The list may show a few fewer if some chats aren't groups or channels.",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+            var stationText by remember { mutableStateOf(viewModel.stationLimit.toString()) }
+            var stationError by remember { mutableStateOf(false) }
+            OutlinedTextField(
+                value = stationText,
+                onValueChange = { input ->
+                    stationText = input
+                    val parsed = input.toIntOrNull()
+                    if (parsed != null && parsed in 1..200) {
+                        stationError = false
+                        viewModel.stationLimit = parsed
+                    } else {
+                        stationError = input.isNotBlank()
+                    }
+                },
+                label = { Text("Stations") },
+                isError = stationError,
+                supportingText = if (stationError) ({ Text("Enter a number from 1 to 200") }) else null,
                 singleLine = true,
                 keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
                 modifier = Modifier.width(160.dp),

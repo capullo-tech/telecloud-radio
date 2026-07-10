@@ -26,6 +26,14 @@ class SettingsRepository @Inject constructor(@ApplicationContext context: Contex
             prefs.edit().putBoolean("remember_last_group", value).apply()
         }
 
+    // How many Telegram chats to fetch for the station list. This is a fetch cap;
+    // the displayed count can be a little lower after non-group/channel chats are filtered out.
+    var stationLimit: Int
+        get() = prefs.getInt("station_limit", 20)
+        set(value) {
+            prefs.edit().putInt("station_limit", value.coerceIn(1, 200)).apply()
+        }
+
     // Sleep timer duration in minutes; the timer itself lives in PlayerViewModel
     var sleepTimerMinutes: Int
         get() = prefs.getInt("sleep_timer_minutes", 30)
