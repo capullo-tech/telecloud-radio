@@ -1015,13 +1015,20 @@ class PlayerViewModel @Inject constructor(
         val newEmoji = if (_uiState.value.reactionsInfo?.ownEmoji == emoji) null else emoji
         _uiState.value = _uiState.value.copy(reactionsLoading = true)
         viewModelScope.launch {
-            val info = runCatching {
+            val result = runCatching {
                 telegramRepository.setOwnReaction(track.chatId, track.messageId, newEmoji)
-            }.getOrNull()
+            }
+            val info = result.getOrNull()
+            // Surface the failure instead of silently doing nothing.
+            result.exceptionOrNull()?.let { e ->
+                _downloadToast.tryEmit("Couldn't react: ${e.message ?: "unknown error"}")
+            }
             if (_uiState.value.track?.messageId == track.messageId) {
                 _uiState.value = _uiState.value.copy(
                     reactionsLoading = false,
-                    reactionsInfo = info ?: _uiState.value.reactionsInfo,
+                    // The read-back can lag TDLib's own reaction update, so trust our intended
+                    // choice for ownEmoji rather than a possibly-stale server echo.
+                    reactionsInfo = info?.copy(ownEmoji = newEmoji) ?: _uiState.value.reactionsInfo,
                     track = if (info != null) {
                         _uiState.value.track?.copy(reactions = info.summary)
                     } else {
