@@ -35,6 +35,17 @@ if (file("../capullo-audio").exists()) {
     }
 }
 
+// Same dev/composite toggle for the Telegram source library: build it from the sibling checkout
+// when present, otherwise resolve the pinned jitpack coordinate.
+if (file("../capullo-source-telegram").exists()) {
+    includeBuild("../capullo-source-telegram") {
+        dependencySubstitution {
+            substitute(module("com.github.capullo-tech:capullo-source-telegram"))
+                .using(project(":capullo-source-telegram"))
+        }
+    }
+}
+
 rootProject.name = "TelecloudRadio"
 include(":app")
 // TDLib (client + prebuilt .so) now comes transitively via the capullo-source-telegram jitpack

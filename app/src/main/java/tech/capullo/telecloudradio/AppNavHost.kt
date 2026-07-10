@@ -69,6 +69,11 @@ import tech.capullo.telecloudradio.ui.settings.SettingsScreen
 // then renders the remote server's stream instead of a Telegram station.
 const val LISTEN_IN_CHAT_ID = Long.MIN_VALUE
 
+// Height the bottom mini-player overlay occupies (48dp icon buttons + 8dp top/bottom padding +
+// a little slack). Screens that scroll under the overlay add this as bottom content padding so
+// their last row/section clears it. See MiniPlayer / SettingsScreen.
+val MiniPlayerHeight = 72.dp
+
 @Composable
 fun AppNavHost(appViewModel: AppViewModel = hiltViewModel()) {
     val backStack = rememberNavBackStack(AuthRoute)
@@ -99,6 +104,8 @@ fun AppNavHost(appViewModel: AppViewModel = hiltViewModel()) {
                 }
                 entry<GroupSelectorRoute> {
                     GroupSelectorScreen(
+                        // Clear the mini-player overlay so the last station row isn't hidden behind it.
+                        bottomContentPadding = if (activePlayback != null) MiniPlayerHeight else 0.dp,
                         onGroupSelected = { chatId, chatTitle ->
                             appViewModel.saveLastGroup(chatId, chatTitle)
                             backStack.add(PlayerRoute(chatId, chatTitle))

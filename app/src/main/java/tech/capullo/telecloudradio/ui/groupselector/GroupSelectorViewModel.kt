@@ -7,6 +7,7 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
 import tech.capullo.source.telegram.data.telegram.TelegramChat
+import tech.capullo.telecloudradio.data.SettingsRepository
 import tech.capullo.telecloudradio.data.telegram.TelegramRepository
 import javax.inject.Inject
 
@@ -24,7 +25,10 @@ sealed class GroupSelectorUiState {
 }
 
 @HiltViewModel
-class GroupSelectorViewModel @Inject constructor(private val repository: TelegramRepository) : ViewModel() {
+class GroupSelectorViewModel @Inject constructor(
+    private val repository: TelegramRepository,
+    private val settings: SettingsRepository,
+) : ViewModel() {
 
     private val _uiState = MutableStateFlow<GroupSelectorUiState>(GroupSelectorUiState.Loading)
     val uiState = _uiState.asStateFlow()
@@ -33,7 +37,7 @@ class GroupSelectorViewModel @Inject constructor(private val repository: Telegra
         loadGroups()
     }
 
-    fun loadGroups(limit: Int = 20) = viewModelScope.launch {
+    fun loadGroups(limit: Int = settings.stationLimit) = viewModelScope.launch {
         _uiState.value = GroupSelectorUiState.Loading
         runCatching { repository.getAudioGroups(limit) }
             .onSuccess { _uiState.value = GroupSelectorUiState.Loaded(it) }
