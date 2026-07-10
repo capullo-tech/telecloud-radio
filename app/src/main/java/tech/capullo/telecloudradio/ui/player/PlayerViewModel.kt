@@ -2,6 +2,8 @@ package tech.capullo.telecloudradio.ui.player
 
 import android.content.ComponentName
 import android.content.Context
+import android.graphics.Bitmap
+import android.graphics.BitmapFactory
 import android.media.MediaMetadataRetriever
 import android.net.Uri
 import android.os.Build
@@ -885,8 +887,10 @@ class PlayerViewModel @Inject constructor(
 
         val (albumArt, audioMeta) = withContext(Dispatchers.IO) {
             val meta = audioMetadataReader.read(path)
-            // Embedded picture first, then previously fetched online art
-            Pair(extractAlbumArt(path) ?: albumArtFetcher.cached(track.messageId), meta)
+            // Embedded picture first, then previously fetched online art. Square-crop it so the
+            // lock-screen/notification artwork and the snapcast/web art aren't stretched: embedded
+            // covers can be any aspect ratio (online-fetched art is already square → no-op).
+            Pair(squareCropArt(extractAlbumArt(path) ?: albumArtFetcher.cached(track.messageId)), meta)
         }
         val displayTrack = track.copy(
             title = audioMeta.tagTitle ?: track.title,
@@ -1034,6 +1038,28 @@ class PlayerViewModel @Inject constructor(
             mmr.embeddedPicture
         }
     }.getOrNull()
+
+    // Center-crop artwork to a square so it isn't stretched by the OS notification/lock-screen
+    // (Media3 hands the raw bytes straight through). Already-square art is returned untouched.
+    private fun squareCropArt(bytes: ByteArray?): ByteArray? {
+        if (bytes == null) return null
+        return runCatching {
+            val bitmap = BitmapFactory.decodeByteArray(bytes, 0, bytes.size) ?: return bytes
+            if (bitmap.width == bitmap.height) return bytes
+            val side = minOf(bitmap.width, bitmap.height)
+            val cropped = Bitmap.createBitmap(
+                bitmap,
+                (bitmap.width - side) / 2,
+                (bitmap.height - side) / 2,
+                side,
+                side,
+            )
+            java.io.ByteArrayOutputStream().use { out ->
+                cropped.compress(Bitmap.CompressFormat.JPEG, 90, out)
+                out.toByteArray()
+            }
+        }.getOrDefault(bytes)
+    }
 
     private fun saveLastPlayed(chatId: Long, messageId: Long) {
         context.getSharedPreferences("player_prefs", Context.MODE_PRIVATE)
