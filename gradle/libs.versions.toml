@@ -13,12 +13,15 @@ kotlin = "2.3.10"
 kotlinxCoroutinesAndroid = "1.10.2"
 kotlinxSerialization = "1.10.0"
 ktor = "2.3.12"
-snapcast = "78d1c48"
+# MUST equal capullo-audio's `libSnapcast` pin. TC depends on lib-snapcast-android BOTH directly
+# (here) and transitively via capullo-audio; gradle picks the lexically-higher hash in a conflict, so
+# a mismatch = green build + stale native .so + dead control plane at runtime (invisible to CI).
+snapcast = "7e7c272"
 zxing = "3.5.3"
 # capullo-audio (Layer 2, the delivery engine) - the recompose consumes its public transport classes
 # (SnapserverProcess/SnapclientProcess/SnapcastControlClient/SnapcontrolPlugin/FIFO/BalanceAudioProcessor).
 # Pinned to an immutable jitpack commit (main-SNAPSHOT serves stale artifacts -> a CI trap).
-capulloAudio = "d9c3bb7"
+capulloAudio = "517eed5"
 # capullo-source-telegram (Layer 3) - the TDLib client + models. Brings lib-tdlib-android
 # (libtdjni.so + org.drinkless.tdlib) transitively, replacing Telecloud's own :tdlib + client copies.
 capulloSourceTelegram = "c080d39"
