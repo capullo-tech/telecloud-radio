@@ -153,8 +153,12 @@ class SnapcastManager @Inject constructor(
         stopBroadcast()
         // OS-assigned ports so multiple capullo apps coexist and the ports aren't a fixed guess.
         // The resolved trio is read back off snapserver.ports to wire the snapclient / NSD / control.
-        return SnapserverProcess(context, STREAM_NAME, SnapserverPorts.free())
-            .also { snapserverProcess = it }.pipeFilepath
+        return SnapserverProcess(
+            context,
+            STREAM_NAME,
+            SnapserverPorts.free(),
+            controlSocketName = SnapserverProcess.controlSocketName(context),
+        ).also { snapserverProcess = it }.pipeFilepath
     }
 
     /**
@@ -167,14 +171,24 @@ class SnapcastManager @Inject constructor(
         // Lazily recreated after a listen-in session tore the stack down; the
         // FIFO file is reused so the tee sink's open write end stays valid.
         val snapserver = snapserverProcess
-            ?: SnapserverProcess(context, STREAM_NAME, SnapserverPorts.free())
-                .also { snapserverProcess = it }
+            ?: SnapserverProcess(
+                context,
+                STREAM_NAME,
+                SnapserverPorts.free(),
+                controlSocketName = SnapserverProcess.controlSocketName(context),
+            ).also { snapserverProcess = it }
         val ports = snapserver.ports
         Log.d(TAG, "Starting broadcast stack")
         // Plugin must be listening before snapserver spawns libsnapcontrol.so. The engine's
         // SnapcontrolPlugin is contract-driven: a StateFlow<NowPlaying> (read) + a PlaybackController
         // (transport), replacing Telecloud's former fat SnapcontrolCallbacks.
-        snapcontrolPlugin = SnapcontrolPlugin(nowPlaying, controller, scope.coroutineContext[Job]!!)
+        snapcontrolPlugin = SnapcontrolPlugin(
+            nowPlaying,
+            controller,
+            scope.coroutineContext[Job]!!,
+            // Bind the SAME per-app name the snapserver told libsnapcontrol.so to connect to.
+            socketName = snapserver.controlSocketName,
+        )
             .also {
                 it.isStreamLocked = _state.value.isStreamLocked
                 it.start()
