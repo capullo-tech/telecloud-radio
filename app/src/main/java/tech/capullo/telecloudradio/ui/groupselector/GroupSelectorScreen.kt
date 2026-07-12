@@ -3,6 +3,7 @@ package tech.capullo.telecloudradio.ui.groupselector
 import android.graphics.BitmapFactory
 import androidx.activity.compose.BackHandler
 import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.Crossfade
 import androidx.compose.animation.core.LinearEasing
 import androidx.compose.animation.core.RepeatMode
 import androidx.compose.animation.core.animateFloat
@@ -62,6 +63,7 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.ImageBitmap
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.drawscope.rotate
@@ -73,6 +75,8 @@ import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.hilt.lifecycle.viewmodel.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
 import tech.capullo.audio.snapcast.DiscoveredSnapserver
 import tech.capullo.source.telegram.data.telegram.TelegramChat
 import tech.capullo.telecloudradio.ui.snapcast.SnapcastViewModel
@@ -147,6 +151,7 @@ fun GroupSelectorScreen(
                     bottomContentPadding = bottomContentPadding,
                     onSelect = viewModel::selectGroup,
                     onJoin = onJoin,
+                    photoLoader = viewModel::chatPhotoPath,
                 )
                 is GroupSelectorUiState.Syncing -> Column(
                     modifier = Modifier
@@ -188,6 +193,7 @@ private fun ChatList(
     bottomContentPadding: Dp,
     onSelect: (TelegramChat) -> Unit,
     onJoin: (host: String, port: Int, httpPort: Int, name: String) -> Unit,
+    photoLoader: suspend (TelegramChat) -> String?,
 ) {
     LazyColumn(
         modifier = Modifier.fillMaxSize(),
@@ -208,7 +214,7 @@ private fun ChatList(
         } else {
             items(chats) { chat ->
                 ListItem(
-                    leadingContent = { ChatAvatar(chat) },
+                    leadingContent = { ChatAvatar(chat, photoLoader) },
                     headlineContent = { Text(chat.title) },
                     supportingContent = {
                         Text(
@@ -225,31 +231,44 @@ private fun ChatList(
     }
 }
 
-// Telegram group/channel avatar: the inline minithumbnail (a small blurred JPEG that ships with
-// the chat, so no download is needed) clipped to a circle; a generic group icon when the chat has
-// no photo or the bytes don't decode.
+// Telegram group/channel avatar. The inline minithumbnail (a tiny blurred JPEG that ships with the
+// chat, so no download is needed) shows instantly as a placeholder; a LaunchedEffect then downloads
+// the crisp full-resolution "small" avatar and crossfades it in. Falls back to a generic group icon
+// when the chat has no photo or nothing decodes. [photoLoader] caches per chatId in the VM, so the
+// crisp file is fetched once and survives LazyColumn scroll/recompose.
 @Composable
-private fun ChatAvatar(chat: TelegramChat) {
-    val bitmap = remember(chat.photo) {
+private fun ChatAvatar(chat: TelegramChat, photoLoader: suspend (TelegramChat) -> String?) {
+    val placeholder = remember(chat.photo) {
         chat.photo?.let { BitmapFactory.decodeByteArray(it, 0, it.size)?.asImageBitmap() }
     }
-    if (bitmap != null) {
-        Image(
-            bitmap = bitmap,
-            contentDescription = null,
-            contentScale = ContentScale.Crop,
-            modifier = Modifier
-                .size(40.dp)
-                .clip(CircleShape),
-        )
+    var crisp by remember(chat.id) { mutableStateOf<ImageBitmap?>(null) }
+    LaunchedEffect(chat.id, chat.photoFileId) {
+        if (chat.photoFileId == null) return@LaunchedEffect
+        val path = photoLoader(chat) ?: return@LaunchedEffect
+        crisp = withContext(Dispatchers.IO) {
+            BitmapFactory.decodeFile(path)?.asImageBitmap()
+        }
+    }
+
+    val shown = crisp ?: placeholder
+    val avatarModifier = Modifier
+        .size(40.dp)
+        .clip(CircleShape)
+    if (shown != null) {
+        Crossfade(targetState = shown, label = "avatar") { bitmap ->
+            Image(
+                bitmap = bitmap,
+                contentDescription = null,
+                contentScale = ContentScale.Crop,
+                modifier = avatarModifier,
+            )
+        }
     } else {
         Icon(
             Icons.Default.Groups,
             contentDescription = null,
             tint = MaterialTheme.colorScheme.onSurfaceVariant,
-            modifier = Modifier
-                .size(40.dp)
-                .clip(CircleShape)
+            modifier = avatarModifier
                 .background(MaterialTheme.colorScheme.surfaceVariant)
                 .padding(8.dp),
         )

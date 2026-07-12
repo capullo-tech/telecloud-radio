@@ -95,6 +95,9 @@ class TelegramRepository @Inject constructor(
 
     suspend fun getAudioGroups(limit: Int): List<TelegramChat> = client.getChats(limit).filter { it.type != ChatType.OTHER }
 
+    // Downloads the crisp small avatar for a chat (TelegramChat.photoFileId); null if unavailable.
+    suspend fun downloadChatPhoto(fileId: Int): String? = client.downloadChatPhoto(fileId)
+
     suspend fun syncAudioMessages(chat: TelegramChat): Int {
         val latestStored = dao.getLatestMessageId(chat.id) ?: 0L
         // Two passes: music messages + audio files sent as documents

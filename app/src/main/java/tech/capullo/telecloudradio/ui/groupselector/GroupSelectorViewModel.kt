@@ -9,6 +9,8 @@ import kotlinx.coroutines.launch
 import tech.capullo.source.telegram.data.telegram.TelegramChat
 import tech.capullo.telecloudradio.data.SettingsRepository
 import tech.capullo.telecloudradio.data.telegram.TelegramRepository
+import java.io.File
+import java.util.concurrent.ConcurrentHashMap
 import javax.inject.Inject
 
 sealed class GroupSelectorUiState {
@@ -33,8 +35,24 @@ class GroupSelectorViewModel @Inject constructor(
     private val _uiState = MutableStateFlow<GroupSelectorUiState>(GroupSelectorUiState.Loading)
     val uiState = _uiState.asStateFlow()
 
+    // chatId → local path of the downloaded crisp avatar. Survives LazyColumn scroll/recompose so
+    // avatars aren't re-fetched every time a row scrolls back into view.
+    private val photoPathCache = ConcurrentHashMap<Long, String>()
+
     init {
         loadGroups()
+    }
+
+    // Returns the local path to the crisp avatar for [chat], downloading it once and caching per
+    // chatId. Null when the chat has no photo or the download fails (caller keeps the placeholder).
+    suspend fun chatPhotoPath(chat: TelegramChat): String? {
+        photoPathCache[chat.id]?.let { return it }
+        val fileId = chat.photoFileId ?: return null
+        val path = repository.downloadChatPhoto(fileId)
+            ?.takeIf { it.isNotEmpty() && File(it).exists() }
+            ?: return null
+        photoPathCache[chat.id] = path
+        return path
     }
 
     fun loadGroups(limit: Int = settings.stationLimit) = viewModelScope.launch {
