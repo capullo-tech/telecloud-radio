@@ -164,88 +164,16 @@ fun SettingsScreen(
                 .padding(bottom = MiniPlayerHeight),
             verticalArrangement = Arrangement.spacedBy(8.dp),
         ) {
-            // Compact rows (label + info-behind-(i) + tight control), ported from QC's
-            // dense Settings. Buffer keeps a narrow decimal field (fractional GB); sleep
-            // and stations use +/- steppers with tap-to-type. NOTE: the VM exposes these as
-            // plain SharedPreferences-backed vars (not snapshot state), so each row holds a
-            // local mutableStateOf and writes through — reading the var alone won't recompose.
-            BufferRow(
-                title = "Download buffer",
-                info = "Maximum disk space for downloaded tracks (GB). " +
-                    "The oldest track is deleted when the buffer is full.",
-                value = text,
-                isError = isError,
-                onValueChange = { input ->
-                    text = input
-                    val parsed = input.toFloatOrNull()
-                    if (parsed != null && parsed > 0f) {
-                        isError = false
-                        viewModel.bufferSizeGb = parsed
-                    } else {
-                        isError = input.isNotBlank()
-                    }
-                },
+            val serverName by viewModel.customServerName.collectAsStateWithLifecycle()
+            ServerNameRow(
+                title = "Server name",
+                info = "The name this device shows to others when it broadcasts — in the " +
+                    "\"Scanning for local radios\" list and the multiroom client list. " +
+                    "Leave blank to use the device name.",
+                value = serverName,
+                placeholder = android.os.Build.MODEL,
+                onCommit = viewModel::setCustomServerName,
             )
-
-            HorizontalDivider(modifier = Modifier.padding(vertical = 8.dp))
-
-            var sleepMinutes by remember { mutableStateOf(viewModel.sleepTimerMinutes) }
-            IntStepperRow(
-                title = "Sleep timer",
-                info = "Countdown started from the moon button on the player. When it runs " +
-                    "out, the current track finishes and playback pauses.",
-                unit = "min",
-                value = sleepMinutes,
-                range = 5..120,
-                step = 5,
-                onValueChange = {
-                    sleepMinutes = it
-                    viewModel.sleepTimerMinutes = it
-                },
-            )
-
-            HorizontalDivider(modifier = Modifier.padding(vertical = 8.dp))
-
-            var stationLimit by remember { mutableStateOf(viewModel.stationLimit) }
-            IntStepperRow(
-                title = "Stations",
-                info = "How many Telegram groups and channels to list on the station-select " +
-                    "screen. The list may show a few fewer if some chats aren't groups or channels.",
-                unit = null,
-                value = stationLimit,
-                range = 1..200,
-                step = 10,
-                onValueChange = {
-                    stationLimit = it
-                    viewModel.stationLimit = it
-                },
-            )
-
-            HorizontalDivider(modifier = Modifier.padding(vertical = 8.dp))
-
-            Text("Navigation", style = MaterialTheme.typography.titleMedium)
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.SpaceBetween,
-                verticalAlignment = androidx.compose.ui.Alignment.CenterVertically,
-            ) {
-                Column(modifier = Modifier.weight(1f)) {
-                    Text("Auto-open last station", style = MaterialTheme.typography.bodyMedium)
-                    Text(
-                        "Skip station list and go directly to the last played station on launch",
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    )
-                }
-                var rememberChecked by remember { mutableStateOf(viewModel.rememberLastGroup) }
-                Switch(
-                    checked = rememberChecked,
-                    onCheckedChange = {
-                        rememberChecked = it
-                        viewModel.rememberLastGroup = it
-                    },
-                )
-            }
 
             HorizontalDivider(modifier = Modifier.padding(vertical = 8.dp))
 
@@ -311,15 +239,19 @@ fun SettingsScreen(
 
             HorizontalDivider(modifier = Modifier.padding(vertical = 8.dp))
 
-            val serverName by viewModel.customServerName.collectAsStateWithLifecycle()
-            ServerNameRow(
-                title = "Server name",
-                info = "The name this device shows to others when it broadcasts — in the " +
-                    "\"Scanning for local radios\" list and the multiroom client list. " +
-                    "Leave blank to use the device name.",
-                value = serverName,
-                placeholder = android.os.Build.MODEL,
-                onCommit = viewModel::setCustomServerName,
+            var sleepMinutes by remember { mutableStateOf(viewModel.sleepTimerMinutes) }
+            IntStepperRow(
+                title = "Sleep timer",
+                info = "Countdown started from the moon button on the player. When it runs " +
+                    "out, the current track finishes and playback pauses.",
+                unit = "min",
+                value = sleepMinutes,
+                range = 5..120,
+                step = 5,
+                onValueChange = {
+                    sleepMinutes = it
+                    viewModel.sleepTimerMinutes = it
+                },
             )
 
             HorizontalDivider(modifier = Modifier.padding(vertical = 8.dp))
@@ -358,6 +290,74 @@ fun SettingsScreen(
                     )
                 }
                 Switch(checked = webDebugPanel, onCheckedChange = viewModel::setWebDebugPanel)
+            }
+
+            HorizontalDivider(modifier = Modifier.padding(vertical = 8.dp))
+
+            // Compact rows (label + info-behind-(i) + tight control), ported from QC's
+            // dense Settings. Buffer keeps a narrow decimal field (fractional GB); sleep
+            // and stations use +/- steppers with tap-to-type. NOTE: the VM exposes these as
+            // plain SharedPreferences-backed vars (not snapshot state), so each row holds a
+            // local mutableStateOf and writes through — reading the var alone won't recompose.
+            BufferRow(
+                title = "Download buffer",
+                info = "Maximum disk space for downloaded tracks (GB). " +
+                    "The oldest track is deleted when the buffer is full.",
+                value = text,
+                isError = isError,
+                onValueChange = { input ->
+                    text = input
+                    val parsed = input.toFloatOrNull()
+                    if (parsed != null && parsed > 0f) {
+                        isError = false
+                        viewModel.bufferSizeGb = parsed
+                    } else {
+                        isError = input.isNotBlank()
+                    }
+                },
+            )
+
+            HorizontalDivider(modifier = Modifier.padding(vertical = 8.dp))
+
+            var stationLimit by remember { mutableStateOf(viewModel.stationLimit) }
+            IntStepperRow(
+                title = "Stations",
+                info = "How many Telegram groups and channels to list on the station-select " +
+                    "screen. The list may show a few fewer if some chats aren't groups or channels.",
+                unit = null,
+                value = stationLimit,
+                range = 1..200,
+                step = 10,
+                onValueChange = {
+                    stationLimit = it
+                    viewModel.stationLimit = it
+                },
+            )
+
+            HorizontalDivider(modifier = Modifier.padding(vertical = 8.dp))
+
+            Text("Navigation", style = MaterialTheme.typography.titleMedium)
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = androidx.compose.ui.Alignment.CenterVertically,
+            ) {
+                Column(modifier = Modifier.weight(1f)) {
+                    Text("Auto-open last station", style = MaterialTheme.typography.bodyMedium)
+                    Text(
+                        "Skip station list and go directly to the last played station on launch",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
+                var rememberChecked by remember { mutableStateOf(viewModel.rememberLastGroup) }
+                Switch(
+                    checked = rememberChecked,
+                    onCheckedChange = {
+                        rememberChecked = it
+                        viewModel.rememberLastGroup = it
+                    },
+                )
             }
 
             HorizontalDivider(modifier = Modifier.padding(vertical = 8.dp))
