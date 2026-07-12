@@ -181,8 +181,8 @@ fun SettingsScreen(
             val themeMode by viewModel.themeMode.collectAsStateWithLifecycle()
             val themeOptions = listOf(
                 ThemeMode.SYSTEM to "System",
-                ThemeMode.DARK to "Dark",
                 ThemeMode.LIGHT to "Light",
+                ThemeMode.DARK to "Dark",
             )
             SingleChoiceSegmentedButtonRow(modifier = Modifier.fillMaxWidth()) {
                 themeOptions.forEachIndexed { index, (mode, label) ->
