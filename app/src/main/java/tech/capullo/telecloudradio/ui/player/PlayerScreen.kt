@@ -438,10 +438,14 @@ private fun PortraitPlayer(
     anyConnected: Boolean,
     onOpenClients: () -> Unit,
 ) {
+    // Bottom-pinned transport: the art is top-anchored (fixed square) and the track
+    // info grows DOWNWARD into the flexible weight(1f) gap, so async metadata (codec
+    // row, reactions/uploader) appearing a beat after the track loads - or a track
+    // change - never re-centers the group and shifts the buttons. (Was Arrangement.Center,
+    // which moved the whole art+info+transport stack on any info-height change.)
     Column(
         modifier = Modifier.fillMaxSize().padding(bottom = 8.dp),
         horizontalAlignment = Alignment.CenterHorizontally,
-        verticalArrangement = Arrangement.Center,
     ) {
         // Edge-to-edge square art, no corner radius
         AlbumArtDisplay(
@@ -452,12 +456,11 @@ private fun PortraitPlayer(
                 .artGestures(viewModel),
         )
         Spacer(Modifier.height(16.dp))
-        Column(
-            horizontalAlignment = Alignment.CenterHorizontally,
-            verticalArrangement = Arrangement.spacedBy(14.dp),
-            modifier = Modifier.padding(horizontal = 28.dp),
-        ) {
-            state.track?.let {
+        state.track?.let {
+            Column(
+                horizontalAlignment = Alignment.CenterHorizontally,
+                modifier = Modifier.padding(horizontal = 28.dp),
+            ) {
                 TrackInfo(
                     track = it,
                     audioMeta = state.audioMeta,
@@ -466,6 +469,15 @@ private fun PortraitPlayer(
                     onReactions = viewModel::toggleReactions,
                 )
             }
+        }
+        // Flexible gap absorbs all art/metadata height variation so the transport
+        // below holds a fixed bottom position - the buttons never jump on track change.
+        Spacer(Modifier.weight(1f))
+        Column(
+            horizontalAlignment = Alignment.CenterHorizontally,
+            verticalArrangement = Arrangement.spacedBy(14.dp),
+            modifier = Modifier.padding(horizontal = 28.dp),
+        ) {
             SeekBar(state = state, onSeek = viewModel::seekTo)
             ControlBar(state = state, viewModel = viewModel)
             // Secondary row: Multiroom (under the order button) · Playlist (under repeat)
@@ -576,10 +588,12 @@ private fun ListenInPlayer(
             )
         },
     ) { padding ->
+        // Same bottom-pin as PortraitPlayer: art top-anchored, info grows into the
+        // flexible gap, transport pinned to the bottom - so the buttons appearing/
+        // disappearing (canGoNext/canPlay toggling) never shifts the art.
         Column(
-            modifier = Modifier.fillMaxSize().padding(padding),
+            modifier = Modifier.fillMaxSize().padding(padding).padding(bottom = 8.dp),
             horizontalAlignment = Alignment.CenterHorizontally,
-            verticalArrangement = Arrangement.Center,
         ) {
             AlbumArtDisplay(
                 albumArt = state.remoteArt,
@@ -642,36 +656,36 @@ private fun ListenInPlayer(
                     style = MaterialTheme.typography.labelSmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
-                Spacer(Modifier.height(8.dp))
-                // Transport: shown only when the remote stream allows it (hidden when
-                // the broadcaster has locked control - mirrors the web now-playing).
-                Row(
-                    horizontalArrangement = Arrangement.spacedBy(16.dp, Alignment.CenterHorizontally),
-                    verticalAlignment = Alignment.CenterVertically,
-                    modifier = Modifier.fillMaxWidth(),
-                ) {
-                    if (props?.canGoPrevious == true) {
-                        IconButton(onClick = { onControl("previous") }, modifier = Modifier.size(56.dp)) {
-                            Icon(Icons.Default.SkipPrevious, contentDescription = "Previous", modifier = Modifier.size(40.dp))
-                        }
+            }
+            Spacer(Modifier.weight(1f))
+            // Transport pinned to the bottom, shown only when the remote stream allows
+            // it (hidden when the broadcaster has locked control - mirrors the web now-playing).
+            Row(
+                horizontalArrangement = Arrangement.spacedBy(16.dp, Alignment.CenterHorizontally),
+                verticalAlignment = Alignment.CenterVertically,
+                modifier = Modifier.fillMaxWidth().padding(horizontal = 28.dp),
+            ) {
+                if (props?.canGoPrevious == true) {
+                    IconButton(onClick = { onControl("previous") }, modifier = Modifier.size(56.dp)) {
+                        Icon(Icons.Default.SkipPrevious, contentDescription = "Previous", modifier = Modifier.size(40.dp))
                     }
-                    if (props?.canPlay == true || props?.canPause == true) {
-                        FilledIconToggleButton(
-                            checked = false,
-                            onCheckedChange = { onControl(if (isPlaying) "pause" else "play") },
-                            modifier = Modifier.size(68.dp),
-                        ) {
-                            Icon(
-                                if (isPlaying) Icons.Default.Pause else Icons.Default.PlayArrow,
-                                contentDescription = if (isPlaying) "Pause" else "Play",
-                                modifier = Modifier.size(40.dp),
-                            )
-                        }
+                }
+                if (props?.canPlay == true || props?.canPause == true) {
+                    FilledIconToggleButton(
+                        checked = false,
+                        onCheckedChange = { onControl(if (isPlaying) "pause" else "play") },
+                        modifier = Modifier.size(68.dp),
+                    ) {
+                        Icon(
+                            if (isPlaying) Icons.Default.Pause else Icons.Default.PlayArrow,
+                            contentDescription = if (isPlaying) "Pause" else "Play",
+                            modifier = Modifier.size(40.dp),
+                        )
                     }
-                    if (props?.canGoNext == true) {
-                        IconButton(onClick = { onControl("next") }, modifier = Modifier.size(56.dp)) {
-                            Icon(Icons.Default.SkipNext, contentDescription = "Next", modifier = Modifier.size(40.dp))
-                        }
+                }
+                if (props?.canGoNext == true) {
+                    IconButton(onClick = { onControl("next") }, modifier = Modifier.size(56.dp)) {
+                        Icon(Icons.Default.SkipNext, contentDescription = "Next", modifier = Modifier.size(40.dp))
                     }
                 }
             }

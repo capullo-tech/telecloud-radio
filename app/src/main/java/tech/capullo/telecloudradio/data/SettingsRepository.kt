@@ -83,6 +83,18 @@ class SettingsRepository @Inject constructor(@ApplicationContext context: Contex
         _themeMode.value = mode
     }
 
+    // Human-facing name this device advertises over NSD (what other devices see when
+    // scanning) and uses for its own snapclient entry. Blank = fall back to the device
+    // model. A flow so SnapcastManager can re-advertise live when it changes mid-broadcast.
+    private val _customServerName = MutableStateFlow(prefs.getString("custom_server_name", "") ?: "")
+    val customServerName: StateFlow<String> = _customServerName.asStateFlow()
+
+    fun setCustomServerName(value: String) {
+        val trimmed = value.trim()
+        prefs.edit().putString("custom_server_name", trimmed).apply()
+        _customServerName.value = trimmed
+    }
+
     // Stereo balance: -1 = full left, 0 = center, +1 = full right.
     // Flow so PlaybackService can re-mix live while the slider moves.
     private val _balance = MutableStateFlow(prefs.getFloat("balance", 0f))
