@@ -104,6 +104,22 @@ class SnapcastManager @Inject constructor(
     private var lastPersistedLat = Int.MIN_VALUE
 
     init {
+        // Re-advertise NSD live when the user renames the server in Settings, so it takes
+        // effect without restarting playback (the broadcast stack stays up for the whole
+        // session). No-ops until a broadcast is running — startBroadcast reads the current
+        // value itself. StateFlow replays the current value on subscribe; that first emit
+        // is a no-op here because snapserverProcess is still null.
+        scope.launch {
+            settingsRepository.customServerName.collect { name ->
+                val snapserver = snapserverProcess ?: return@collect
+                if (!_state.value.isBroadcasting) return@collect
+                val ports = snapserver.ports
+                nsdRegistrar?.stop()
+                nsdRegistrar = SnapserverNsdRegistrar(context).also {
+                    it.start(name, ports.streamPort, ports.tcpPort, ports.httpPort)
+                }
+            }
+        }
         // Persist own client's volume/latency on ANY change (slider, knob, remote controller).
         scope.launch {
             _state.collect { s ->
@@ -196,7 +212,14 @@ class SnapcastManager @Inject constructor(
         snapserverJob = scope.launch { snapserver.start() }
         startLocalSnapclient("localhost", ports.streamPort)
         nsdRegistrar = SnapserverNsdRegistrar(context)
-            .also { it.start("", ports.streamPort, ports.tcpPort, ports.httpPort) }
+            .also {
+                it.start(
+                    settingsRepository.customServerName.value,
+                    ports.streamPort,
+                    ports.tcpPort,
+                    ports.httpPort,
+                )
+            }
         startControl("localhost", ports.httpPort)
         _state.update { it.copy(isBroadcasting = true, broadcastHttpPort = ports.httpPort) }
     }

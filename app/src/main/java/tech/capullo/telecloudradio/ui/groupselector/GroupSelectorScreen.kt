@@ -35,6 +35,7 @@ import androidx.compose.material.icons.filled.DeviceHub
 import androidx.compose.material.icons.filled.ExpandLess
 import androidx.compose.material.icons.filled.ExpandMore
 import androidx.compose.material.icons.filled.Groups
+import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material3.Button
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
@@ -81,6 +82,7 @@ import tech.capullo.telecloudradio.ui.snapcast.SnapcastViewModel
 fun GroupSelectorScreen(
     onGroupSelected: (chatId: Long, chatTitle: String) -> Unit,
     onJoinServer: (host: String, port: Int, name: String) -> Unit,
+    onOpenSettings: () -> Unit,
     bottomContentPadding: Dp = 0.dp,
     viewModel: GroupSelectorViewModel = hiltViewModel(),
     snapViewModel: SnapcastViewModel = hiltViewModel(),
@@ -120,6 +122,11 @@ fun GroupSelectorScreen(
                         IconButton(onClick = { viewModel.backToList() }) {
                             Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back")
                         }
+                    }
+                },
+                actions = {
+                    IconButton(onClick = onOpenSettings) {
+                        Icon(Icons.Default.Settings, contentDescription = "Settings")
                     }
                 },
             )

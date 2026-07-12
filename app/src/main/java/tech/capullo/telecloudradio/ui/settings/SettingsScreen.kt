@@ -1,17 +1,24 @@
 package tech.capullo.telecloudradio.ui.settings
 
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.filled.Add
+import androidx.compose.material.icons.filled.Check
+import androidx.compose.material.icons.filled.Remove
+import androidx.compose.material.icons.outlined.Info
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.HorizontalDivider
@@ -19,6 +26,7 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
+import androidx.compose.material3.OutlinedIconButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.SegmentedButton
@@ -34,8 +42,10 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.input.KeyboardType
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.hilt.lifecycle.viewmodel.compose.hiltViewModel
 import androidx.lifecycle.ViewModel
@@ -112,6 +122,9 @@ class SettingsViewModel @Inject constructor(
 
     val webAutoplay: StateFlow<Boolean> = settings.webAutoplay
     fun setWebAutoplay(value: Boolean) = settings.setWebAutoplay(value)
+
+    val customServerName: StateFlow<String> = settings.customServerName
+    fun setCustomServerName(value: String) = settings.setCustomServerName(value)
 }
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -151,14 +164,17 @@ fun SettingsScreen(
                 .padding(bottom = MiniPlayerHeight),
             verticalArrangement = Arrangement.spacedBy(8.dp),
         ) {
-            Text("Download buffer", style = MaterialTheme.typography.titleMedium)
-            Text(
-                "Maximum disk space for downloaded tracks (GB). The oldest track is deleted when the buffer is full.",
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-            )
-            OutlinedTextField(
+            // Compact rows (label + info-behind-(i) + tight control), ported from QC's
+            // dense Settings. Buffer keeps a narrow decimal field (fractional GB); sleep
+            // and stations use +/- steppers with tap-to-type. NOTE: the VM exposes these as
+            // plain SharedPreferences-backed vars (not snapshot state), so each row holds a
+            // local mutableStateOf and writes through — reading the var alone won't recompose.
+            BufferRow(
+                title = "Download buffer",
+                info = "Maximum disk space for downloaded tracks (GB). " +
+                    "The oldest track is deleted when the buffer is full.",
                 value = text,
+                isError = isError,
                 onValueChange = { input ->
                     text = input
                     val parsed = input.toFloatOrNull()
@@ -169,74 +185,40 @@ fun SettingsScreen(
                         isError = input.isNotBlank()
                     }
                 },
-                label = { Text("GB") },
-                isError = isError,
-                supportingText = if (isError) ({ Text("Enter a positive number") }) else null,
-                singleLine = true,
-                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal),
-                modifier = Modifier.width(160.dp),
             )
 
             HorizontalDivider(modifier = Modifier.padding(vertical = 8.dp))
 
-            Text("Sleep timer", style = MaterialTheme.typography.titleMedium)
-            Text(
-                "Countdown started from the moon button on the player. When it runs " +
+            var sleepMinutes by remember { mutableStateOf(viewModel.sleepTimerMinutes) }
+            IntStepperRow(
+                title = "Sleep timer",
+                info = "Countdown started from the moon button on the player. When it runs " +
                     "out, the current track finishes and playback pauses.",
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-            )
-            var sleepText by remember { mutableStateOf(viewModel.sleepTimerMinutes.toString()) }
-            var sleepError by remember { mutableStateOf(false) }
-            OutlinedTextField(
-                value = sleepText,
-                onValueChange = { input ->
-                    sleepText = input
-                    val parsed = input.toIntOrNull()
-                    if (parsed != null && parsed > 0) {
-                        sleepError = false
-                        viewModel.sleepTimerMinutes = parsed
-                    } else {
-                        sleepError = input.isNotBlank()
-                    }
+                unit = "min",
+                value = sleepMinutes,
+                range = 5..120,
+                step = 5,
+                onValueChange = {
+                    sleepMinutes = it
+                    viewModel.sleepTimerMinutes = it
                 },
-                label = { Text("Minutes") },
-                isError = sleepError,
-                supportingText = if (sleepError) ({ Text("Enter a positive whole number") }) else null,
-                singleLine = true,
-                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
-                modifier = Modifier.width(160.dp),
             )
 
             HorizontalDivider(modifier = Modifier.padding(vertical = 8.dp))
 
-            Text("Stations", style = MaterialTheme.typography.titleMedium)
-            Text(
-                "How many Telegram groups and channels to list on the station-select screen. " +
-                    "The list may show a few fewer if some chats aren't groups or channels.",
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-            )
-            var stationText by remember { mutableStateOf(viewModel.stationLimit.toString()) }
-            var stationError by remember { mutableStateOf(false) }
-            OutlinedTextField(
-                value = stationText,
-                onValueChange = { input ->
-                    stationText = input
-                    val parsed = input.toIntOrNull()
-                    if (parsed != null && parsed in 1..200) {
-                        stationError = false
-                        viewModel.stationLimit = parsed
-                    } else {
-                        stationError = input.isNotBlank()
-                    }
+            var stationLimit by remember { mutableStateOf(viewModel.stationLimit) }
+            IntStepperRow(
+                title = "Stations",
+                info = "How many Telegram groups and channels to list on the station-select " +
+                    "screen. The list may show a few fewer if some chats aren't groups or channels.",
+                unit = null,
+                value = stationLimit,
+                range = 1..200,
+                step = 10,
+                onValueChange = {
+                    stationLimit = it
+                    viewModel.stationLimit = it
                 },
-                label = { Text("Stations") },
-                isError = stationError,
-                supportingText = if (stationError) ({ Text("Enter a number from 1 to 200") }) else null,
-                singleLine = true,
-                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
-                modifier = Modifier.width(160.dp),
             )
 
             HorizontalDivider(modifier = Modifier.padding(vertical = 8.dp))
@@ -326,6 +308,19 @@ fun SettingsScreen(
                     enabled = balance != 0f,
                 ) { Text("Center") }
             }
+
+            HorizontalDivider(modifier = Modifier.padding(vertical = 8.dp))
+
+            val serverName by viewModel.customServerName.collectAsStateWithLifecycle()
+            ServerNameRow(
+                title = "Server name",
+                info = "The name this device shows to others when it broadcasts — in the " +
+                    "\"Scanning for local radios\" list and the multiroom client list. " +
+                    "Leave blank to use the device name.",
+                value = serverName,
+                placeholder = android.os.Build.MODEL,
+                onCommit = viewModel::setCustomServerName,
+            )
 
             HorizontalDivider(modifier = Modifier.padding(vertical = 8.dp))
 
@@ -419,4 +414,183 @@ fun SettingsScreen(
             }
         }
     }
+}
+
+// A section label with a small (i) that reveals the full explanation in a dialog, so the
+// verbose "why" no longer takes 2–3 permanent lines under every setting (user request).
+@Composable
+private fun LabelWithInfo(title: String, info: String, modifier: Modifier = Modifier) {
+    var showInfo by remember { mutableStateOf(false) }
+    Row(modifier = modifier, verticalAlignment = Alignment.CenterVertically) {
+        Text(title, style = MaterialTheme.typography.bodyMedium)
+        IconButton(onClick = { showInfo = true }, modifier = Modifier.size(28.dp)) {
+            Icon(
+                Icons.Outlined.Info,
+                contentDescription = "About $title",
+                modifier = Modifier.size(16.dp),
+                tint = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        }
+    }
+    if (showInfo) {
+        AlertDialog(
+            onDismissRequest = { showInfo = false },
+            title = { Text(title) },
+            text = { Text(info, style = MaterialTheme.typography.bodyMedium) },
+            confirmButton = { TextButton(onClick = { showInfo = false }) { Text("Got it") } },
+        )
+    }
+}
+
+// Buffer is fractional GB over a wide range, so it keeps a narrow decimal field rather
+// than a stepper (the field is ~96dp instead of the old 160dp island).
+@Composable
+private fun BufferRow(
+    title: String,
+    info: String,
+    value: String,
+    isError: Boolean,
+    onValueChange: (String) -> Unit,
+) {
+    Row(
+        modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        LabelWithInfo(title, info, modifier = Modifier.weight(1f))
+        OutlinedTextField(
+            value = value,
+            onValueChange = onValueChange,
+            label = { Text("GB") },
+            isError = isError,
+            singleLine = true,
+            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal),
+            modifier = Modifier.width(96.dp),
+        )
+    }
+}
+
+// Free-text name field under a LabelWithInfo. A name needs width, so the field is
+// full-width below the label (not a narrow island); it commits via the trailing check
+// only when changed, so we don't re-advertise NSD on every keystroke. Placeholder shows
+// the device-name fallback used when left blank.
+@Composable
+private fun ServerNameRow(
+    title: String,
+    info: String,
+    value: String,
+    placeholder: String,
+    onCommit: (String) -> Unit,
+) {
+    var text by remember(value) { mutableStateOf(value) }
+    Column(
+        modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp),
+        verticalArrangement = Arrangement.spacedBy(4.dp),
+    ) {
+        LabelWithInfo(title, info)
+        OutlinedTextField(
+            value = text,
+            onValueChange = { text = it },
+            placeholder = { Text(placeholder) },
+            singleLine = true,
+            modifier = Modifier.fillMaxWidth(),
+            trailingIcon = {
+                if (text.trim() != value) {
+                    IconButton(onClick = { onCommit(text) }) {
+                        Icon(Icons.Default.Check, "Save", tint = MaterialTheme.colorScheme.primary)
+                    }
+                }
+            },
+        )
+    }
+}
+
+// Compact [ − ] value [ + ] stepper (ported from QC's SettingsScreen); the value is
+// tappable for precise entry via StepperInputDialog. Guards keep it inside [range].
+@Composable
+private fun IntStepperRow(
+    title: String,
+    info: String,
+    unit: String?,
+    value: Int,
+    range: IntRange,
+    step: Int,
+    onValueChange: (Int) -> Unit,
+) {
+    var showInput by remember { mutableStateOf(false) }
+    if (showInput) {
+        StepperInputDialog(
+            label = title,
+            current = value,
+            range = range,
+            onDismiss = { showInput = false },
+            onConfirm = {
+                onValueChange(it)
+                showInput = false
+            },
+        )
+    }
+    Row(
+        modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        LabelWithInfo(title, info, modifier = Modifier.weight(1f))
+        Row(
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(4.dp),
+        ) {
+            OutlinedIconButton(
+                onClick = { if (value - step >= range.first) onValueChange(value - step) },
+                modifier = Modifier.size(32.dp),
+            ) {
+                Icon(Icons.Default.Remove, "Decrease", modifier = Modifier.size(16.dp))
+            }
+            Text(
+                text = if (unit != null) "$value $unit" else "$value",
+                style = MaterialTheme.typography.bodyMedium,
+                textAlign = TextAlign.Center,
+                color = MaterialTheme.colorScheme.primary,
+                modifier = Modifier
+                    .widthIn(min = 44.dp)
+                    .clickable { showInput = true },
+            )
+            OutlinedIconButton(
+                onClick = { if (value + step <= range.last) onValueChange(value + step) },
+                modifier = Modifier.size(32.dp),
+            ) {
+                Icon(Icons.Default.Add, "Increase", modifier = Modifier.size(16.dp))
+            }
+        }
+    }
+}
+
+@Composable
+private fun StepperInputDialog(
+    label: String,
+    current: Int,
+    range: IntRange,
+    onDismiss: () -> Unit,
+    onConfirm: (Int) -> Unit,
+) {
+    var text by remember { mutableStateOf(current.toString()) }
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text(label) },
+        text = {
+            OutlinedTextField(
+                value = text,
+                onValueChange = { text = it.filter { c -> c.isDigit() }.take(6) },
+                label = { Text("${range.first}–${range.last}") },
+                singleLine = true,
+                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+            )
+        },
+        confirmButton = {
+            TextButton(onClick = {
+                text.toIntOrNull()?.coerceIn(range)?.let { onConfirm(it) } ?: onDismiss()
+            }) { Text("Set") }
+        },
+        dismissButton = {
+            TextButton(onClick = onDismiss) { Text("Cancel") }
+        },
+    )
 }

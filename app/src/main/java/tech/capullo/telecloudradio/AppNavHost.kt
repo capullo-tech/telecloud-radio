@@ -115,6 +115,7 @@ fun AppNavHost(appViewModel: AppViewModel = hiltViewModel()) {
                         onJoinServer = { _, _, name ->
                             backStack.add(PlayerRoute(LISTEN_IN_CHAT_ID, name))
                         },
+                        onOpenSettings = { backStack.add(SettingsRoute) },
                     )
                 }
                 entry<PlayerRoute> { key ->
