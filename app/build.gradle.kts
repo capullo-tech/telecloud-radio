@@ -20,6 +20,24 @@ android {
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }
 
+    // Release signing. Keystore + passwords come from env vars (CI secrets wired in Build.yml;
+    // exported vars for a local windows-as release build). If the keystore isn't present (e.g. a
+    // fork PR without secrets) the release build is left unsigned rather than failing, so CI still
+    // validates the build.
+    val releaseKeystore = System.getenv("RELEASE_KEYSTORE_FILE")
+        ?.let(::file)
+        ?.takeIf { it.exists() && it.length() > 0L }
+    signingConfigs {
+        if (releaseKeystore != null) {
+            create("release") {
+                storeFile = releaseKeystore
+                storePassword = System.getenv("RELEASE_STORE_PASSWORD")
+                keyAlias = System.getenv("RELEASE_KEY_ALIAS")
+                keyPassword = System.getenv("RELEASE_KEY_PASSWORD")
+            }
+        }
+    }
+
     buildTypes {
         release {
             isMinifyEnabled = false
@@ -27,6 +45,7 @@ android {
                 getDefaultProguardFile("proguard-android-optimize.txt"),
                 "proguard-rules.pro",
             )
+            signingConfig = signingConfigs.findByName("release")
         }
     }
     compileOptions {
