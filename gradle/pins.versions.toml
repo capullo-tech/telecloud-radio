@@ -1,0 +1,40 @@
+# Telecloud LOCAL pins catalog (`pins.*`) - the inter-repo capullo/L0 coordinates (pinned
+# independently per release, the org) + TC's own single-app deps AND the
+# Compose libraries TC deliberately versions OUTSIDE the shared Compose BOM. Everything else
+# (toolchain, BOM-managed Compose, lifecycle, nav3, media3, Room, Hilt, ktor, coroutines, zxing,
+# junit) comes from the shared `libs` catalog.
+[versions]
+# capullo-audio (Layer 2) - immutable jitpack commit; engine + capullo-audio-ui share it.
+capulloAudio = "76888df"
+# capullo-source-telegram (Layer 3) - brings lib-tdlib-android transitively.
+capulloSourceTelegram = "168e02e"
+# lib-snapcast-android (Layer 0). MUST equal capullo-audio's libSnapcast pin: TC depends on it BOTH
+# directly (here) and transitively via capullo-audio; a mismatch = green build + stale native .so +
+# dead control plane at runtime (invisible to CI). capullo-audio pins 7e7c272.
+snapcast = "7e7c272"
+# --- Compose libs TC pins OUTSIDE the shared BOM (deliberate; do NOT fold into the BOM) ---
+composeLatest = "1.7.8"          # material-icons core/extended
+material3 = "1.5.0-alpha06"      # newer than the 2026.02.01 BOM's material3
+# --- TC single-app deps ---
+hiltNavigationCompose = "1.3.0"
+securityCrypto = "1.1.0-alpha06"
+startupRuntime = "1.2.0"
+mockk = "1.14.6"
+
+[libraries]
+# jitpack multi-module coords: capullo-audio-ui is ONLY at the nested group
+# com.github.capullo-tech.capullo-audio, so the engine must use the SAME nested group (flat +
+# nested = duplicate classes).
+capullo-audio = { module = "com.github.capullo-tech.capullo-audio:capullo-audio", version.ref = "capulloAudio" }
+capullo-audio-ui = { module = "com.github.capullo-tech.capullo-audio:capullo-audio-ui", version.ref = "capulloAudio" }
+capullo-source-telegram = { module = "com.github.capullo-tech:capullo-source-telegram", version.ref = "capulloSourceTelegram" }
+lib-snapcast-android = { module = "com.github.capullo-tech.lib-snapcast-android:lib-snapcast-android", version.ref = "snapcast" }
+# Compose outside the BOM (TC-specific versions).
+androidx-material3 = { group = "androidx.compose.material3", name = "material3", version.ref = "material3" }
+androidx-compose-material-icons-core = { group = "androidx.compose.material", name = "material-icons-core", version.ref = "composeLatest" }
+androidx-compose-material-icons-extended = { group = "androidx.compose.material", name = "material-icons-extended", version.ref = "composeLatest" }
+# TC single-app deps.
+androidx-hilt-lifecycle-viewmodel-compose = { module = "androidx.hilt:hilt-lifecycle-viewmodel-compose", version.ref = "hiltNavigationCompose" }
+androidx-security-crypto = { group = "androidx.security", name = "security-crypto", version.ref = "securityCrypto" }
+androidx-startup-runtime = { group = "androidx.startup", name = "startup-runtime", version.ref = "startupRuntime" }
+mockk = { group = "io.mockk", name = "mockk", version.ref = "mockk" }
