@@ -14,6 +14,9 @@ permissions:
 jobs:
   build:
     uses: ./.github/workflows/build.yml
+    # Reusable workflows don't get the repo secrets unless we pass them through - without this the
+    # release build has no signing keystore and emits an UNSIGNED APK (green, but un-installable).
+    secrets: inherit
   release:
     needs: build
     runs-on: ubuntu-latest
