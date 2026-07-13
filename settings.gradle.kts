@@ -16,8 +16,14 @@ dependencyResolutionManagement {
     repositories {
         google()
         mavenCentral()
-        // lib-snapcast-android (prebuilt snapserver/snapclient binaries)
+        // lib-snapcast-android + capullo-audio(-ui)/source-telegram + build-conventions (all jitpack)
         maven { url = uri("https://jitpack.io") }
+    }
+    versionCatalogs {
+        // Shared org toolchain (CAPULLO_AUDIO_PLATFORM.md §5), pinned by commit from jitpack.
+        create("libs") { from("com.github.capullo-tech:build-conventions:b07e979") }
+        // Local pins: inter-repo capullo/L0 coordinates + TC's own deps + the non-BOM Compose libs.
+        create("pins") { from(files("gradle/pins.versions.toml")) }
     }
 }
 

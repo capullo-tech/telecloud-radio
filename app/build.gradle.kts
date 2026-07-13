@@ -61,47 +61,47 @@ android {
 dependencies {
     // TDLib client + models (Layer 3): brings lib-tdlib-android (libtdjni.so + org.drinkless.tdlib)
     // transitively. Replaces Telecloud's own :tdlib module + TelegramClient/TdLibTelegramClient copies.
-    implementation(libs.capullo.source.telegram)
+    implementation(pins.capullo.source.telegram)
 
     ksp(libs.hilt.android.compiler)
-    ksp(libs.androidx.room.compiler)
+    ksp(libs.room.compiler)
 
     implementation(libs.hilt.android)
-    implementation(libs.androidx.hilt.lifecycle.viewmodel.compose)
+    implementation(pins.androidx.hilt.lifecycle.viewmodel.compose)
     implementation(libs.androidx.core.ktx)
     implementation(libs.androidx.activity.compose)
     implementation(platform(libs.androidx.compose.bom))
-    implementation(libs.androidx.ui)
-    implementation(libs.androidx.ui.graphics)
-    implementation(libs.androidx.ui.tooling.preview)
-    implementation(libs.androidx.material3)
-    implementation(libs.androidx.compose.material.icons.core)
-    implementation(libs.androidx.compose.material.icons.extended)
+    implementation(libs.androidx.compose.ui)
+    implementation(libs.androidx.compose.ui.graphics)
+    implementation(libs.androidx.compose.ui.tooling.preview)
+    implementation(pins.androidx.material3)
+    implementation(pins.androidx.compose.material.icons.core)
+    implementation(pins.androidx.compose.material.icons.extended)
     implementation(libs.androidx.navigation3.runtime)
     implementation(libs.androidx.navigation3.ui)
     implementation(libs.androidx.lifecycle.viewmodel.navigation3)
     implementation(libs.androidx.lifecycle.runtime.compose)
     implementation(libs.androidx.lifecycle.runtime.ktx)
     implementation(libs.androidx.lifecycle.viewmodel.compose)
-    implementation(libs.androidx.startup.runtime)
-    implementation(libs.androidx.room.runtime)
-    implementation(libs.androidx.room.ktx)
-    implementation(libs.androidx.media3.exoplayer)
-    implementation(libs.androidx.media3.session)
-    implementation(libs.androidx.media3.common)
-    implementation(libs.androidx.security.crypto)
+    implementation(pins.androidx.startup.runtime)
+    implementation(libs.room.runtime)
+    implementation(libs.room.ktx)
+    implementation(libs.media3.exoplayer)
+    implementation(libs.media3.session)
+    implementation(libs.media3.common)
+    implementation(pins.androidx.security.crypto)
     implementation(libs.kotlinx.coroutines.android)
     implementation("net.jthink:jaudiotagger:3.0.1")
 
     // capullo-audio (Layer 2) — the delivery engine's public transport classes: SnapserverProcess,
     // SnapclientProcess, SnapcastControlClient, SnapcontrolPlugin, FIFO sink, BalanceAudioProcessor
     // (re-exports capullo-audio-contracts as api). Brings lib-snapcast-android + ktor transitively.
-    implementation(libs.capullo.audio)
-    implementation(libs.capullo.audio.ui) // shared control sheet + QR dialog
+    implementation(pins.capullo.audio)
+    implementation(pins.capullo.audio.ui) // shared control sheet + QR dialog
 
     // Snapcast multiroom broadcast: native snapserver/snapclient binaries +
     // ktor WebSocket client for the Snapcast JSON-RPC control API
-    implementation(libs.lib.snapcast.android)
+    implementation(pins.lib.snapcast.android)
     implementation(libs.ktor.client.okhttp)
     implementation(libs.ktor.client.websockets)
     implementation(libs.ktor.serialization.kotlinx.json)
@@ -111,11 +111,11 @@ dependencies {
 
     testImplementation(libs.junit)
     testImplementation(libs.kotlinx.coroutines.test)
-    testImplementation(libs.mockk)
+    testImplementation(pins.mockk)
     androidTestImplementation(libs.androidx.junit)
     androidTestImplementation(libs.androidx.espresso.core)
     androidTestImplementation(platform(libs.androidx.compose.bom))
-    androidTestImplementation(libs.androidx.ui.test.junit4)
-    debugImplementation(libs.androidx.ui.tooling)
-    debugImplementation(libs.androidx.ui.test.manifest)
+    androidTestImplementation(libs.androidx.compose.ui.test.junit4)
+    debugImplementation(libs.androidx.compose.ui.tooling)
+    debugImplementation(libs.androidx.compose.ui.test.manifest)
 }
