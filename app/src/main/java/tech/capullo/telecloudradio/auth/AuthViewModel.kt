@@ -21,6 +21,12 @@ class AuthViewModel @Inject constructor(
     private val _error = MutableStateFlow<String?>(null)
     val error = _error.asStateFlow()
 
+    // True while an auth request is in flight. The screen disables the submit button on it so a
+    // double-tap can't fire two authorization requests to TDLib ("another authentication is
+    // happening"). Reset in finally + when the auth state advances to the next step.
+    private val _submitting = MutableStateFlow(false)
+    val submitting = _submitting.asStateFlow()
+
     fun submitCredentials(apiId: String, apiHash: String) {
         val id = apiId.trim().toIntOrNull()
         if (id == null || id == 0) {
@@ -31,23 +37,31 @@ class AuthViewModel @Inject constructor(
             _error.value = "API Hash cannot be empty"
             return
         }
+        // setupParameters() is idempotent TDLib init (safe on a repeated tap); the guarded
+        // submit() below protects the phone/code/password steps where a double-fire is the problem.
         credentials.save(id, apiHash.trim())
         repository.setupParameters()
     }
 
-    fun submitPhone(phone: String) = viewModelScope.launch {
-        runCatching { repository.setPhoneNumber(phone) }
-            .onFailure { _error.value = it.message }
-    }
+    fun submitPhone(phone: String) = submit { repository.setPhoneNumber(phone) }
 
-    fun submitCode(code: String) = viewModelScope.launch {
-        runCatching { repository.checkCode(code) }
-            .onFailure { _error.value = it.message }
-    }
+    fun submitCode(code: String) = submit { repository.checkCode(code) }
 
-    fun submitPassword(password: String) = viewModelScope.launch {
-        runCatching { repository.checkPassword(password) }
-            .onFailure { _error.value = it.message }
+    fun submitPassword(password: String) = submit { repository.checkPassword(password) }
+
+    // Runs one auth step guarded by [_submitting] so a repeated tap is a no-op until it finishes.
+    private fun submit(step: suspend () -> Unit) {
+        if (_submitting.value) return
+        _submitting.value = true
+        viewModelScope.launch {
+            try {
+                step()
+            } catch (e: Throwable) {
+                _error.value = e.message
+            } finally {
+                _submitting.value = false
+            }
+        }
     }
 
     fun clearError() {
