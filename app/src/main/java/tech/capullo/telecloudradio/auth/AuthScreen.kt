@@ -40,6 +40,7 @@ import tech.capullo.source.telegram.data.telegram.AuthState
 fun AuthScreen(onAuthenticated: () -> Unit, viewModel: AuthViewModel = hiltViewModel()) {
     val authState by viewModel.authState.collectAsStateWithLifecycle()
     val error by viewModel.error.collectAsStateWithLifecycle()
+    val submitting by viewModel.submitting.collectAsStateWithLifecycle()
 
     LaunchedEffect(authState) {
         if (authState is AuthState.Ready) onAuthenticated()
@@ -55,11 +56,11 @@ fun AuthScreen(onAuthenticated: () -> Unit, viewModel: AuthViewModel = hiltViewM
             is AuthState.WaitParameters, is AuthState.Unknown ->
                 CredentialsForm(onSubmit = viewModel::submitCredentials)
             is AuthState.WaitPhone ->
-                PhoneInputForm(onSubmit = viewModel::submitPhone)
+                PhoneInputForm(onSubmit = viewModel::submitPhone, submitting = submitting)
             is AuthState.WaitCode ->
-                CodeInputForm(onSubmit = viewModel::submitCode)
+                CodeInputForm(onSubmit = viewModel::submitCode, submitting = submitting)
             is AuthState.WaitPassword ->
-                PasswordInputForm(onSubmit = viewModel::submitPassword)
+                PasswordInputForm(onSubmit = viewModel::submitPassword, submitting = submitting)
             is AuthState.Ready ->
                 CircularProgressIndicator()
             is AuthState.Error ->
@@ -143,7 +144,7 @@ private fun CredentialsForm(onSubmit: (apiId: String, apiHash: String) -> Unit) 
 }
 
 @Composable
-private fun PhoneInputForm(onSubmit: (String) -> Unit) {
+private fun PhoneInputForm(onSubmit: (String) -> Unit, submitting: Boolean) {
     var phone by remember { mutableStateOf("") }
     Column(
         horizontalAlignment = Alignment.CenterHorizontally,
@@ -161,7 +162,7 @@ private fun PhoneInputForm(onSubmit: (String) -> Unit) {
         )
         Button(
             onClick = { onSubmit(phone.trim()) },
-            enabled = phone.isNotBlank(),
+            enabled = phone.isNotBlank() && !submitting,
             modifier = Modifier.fillMaxWidth(),
         ) {
             Text("Continue")
@@ -170,7 +171,7 @@ private fun PhoneInputForm(onSubmit: (String) -> Unit) {
 }
 
 @Composable
-private fun PasswordInputForm(onSubmit: (String) -> Unit) {
+private fun PasswordInputForm(onSubmit: (String) -> Unit, submitting: Boolean) {
     var password by remember { mutableStateOf("") }
     Column(
         horizontalAlignment = Alignment.CenterHorizontally,
@@ -190,7 +191,7 @@ private fun PasswordInputForm(onSubmit: (String) -> Unit) {
         )
         Button(
             onClick = { onSubmit(password) },
-            enabled = password.isNotEmpty(),
+            enabled = password.isNotEmpty() && !submitting,
             modifier = Modifier.fillMaxWidth(),
         ) {
             Text("Continue")
@@ -199,7 +200,7 @@ private fun PasswordInputForm(onSubmit: (String) -> Unit) {
 }
 
 @Composable
-private fun CodeInputForm(onSubmit: (String) -> Unit) {
+private fun CodeInputForm(onSubmit: (String) -> Unit, submitting: Boolean) {
     var code by remember { mutableStateOf("") }
     Column(
         horizontalAlignment = Alignment.CenterHorizontally,
@@ -218,7 +219,7 @@ private fun CodeInputForm(onSubmit: (String) -> Unit) {
         )
         Button(
             onClick = { onSubmit(code.trim()) },
-            enabled = code.isNotBlank(),
+            enabled = code.isNotBlank() && !submitting,
             modifier = Modifier.fillMaxWidth(),
         ) {
             Text("Verify")
