@@ -21,7 +21,7 @@ zxing = "3.5.3"
 # capullo-audio (Layer 2, the delivery engine) — the recompose consumes its public transport classes
 # (SnapserverProcess/SnapclientProcess/SnapcastControlClient/SnapcontrolPlugin/FIFO/BalanceAudioProcessor).
 # Pinned to an immutable jitpack commit (main-SNAPSHOT serves stale artifacts -> a CI trap).
-capulloAudio = "517eed5"
+capulloAudio = "76888df"
 # capullo-source-telegram (Layer 3) — the TDLib client + models. Brings lib-tdlib-android
 # (libtdjni.so + org.drinkless.tdlib) transitively, replacing Telecloud's own :tdlib + client copies.
 capulloSourceTelegram = "168e02e"
