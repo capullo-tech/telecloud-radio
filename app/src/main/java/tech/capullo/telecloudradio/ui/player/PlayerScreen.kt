@@ -87,7 +87,7 @@ import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExperimentalMaterial3Api
-import androidx.compose.material3.FilledIconToggleButton
+import androidx.compose.material3.FilledIconButton
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
@@ -671,9 +671,8 @@ private fun ListenInPlayer(
                     }
                 }
                 if (props?.canPlay == true || props?.canPause == true) {
-                    FilledIconToggleButton(
-                        checked = false,
-                        onCheckedChange = { onControl(if (isPlaying) "pause" else "play") },
+                    FilledIconButton(
+                        onClick = { onControl(if (isPlaying) "pause" else "play") },
                         modifier = Modifier.size(68.dp),
                     ) {
                         Icon(
@@ -788,9 +787,8 @@ private fun ControlBar(state: PlayerUiState, viewModel: PlayerViewModel) {
         // Play/pause keeps controlling the audible track while another one loads;
         // the load is indicated by a ring around the button, not by replacing it.
         Box(contentAlignment = Alignment.Center) {
-            FilledIconToggleButton(
-                checked = false,
-                onCheckedChange = { viewModel.togglePlayPause() },
+            FilledIconButton(
+                onClick = { viewModel.togglePlayPause() },
                 modifier = Modifier.size(68.dp),
             ) {
                 Icon(

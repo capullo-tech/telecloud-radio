@@ -8,7 +8,6 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
-import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.text.KeyboardOptions
@@ -61,6 +60,7 @@ import tech.capullo.telecloudradio.data.db.StationInfo
 import tech.capullo.telecloudradio.data.playlist.PlaylistRepository
 import tech.capullo.telecloudradio.player.DownloadManager
 import javax.inject.Inject
+import kotlin.math.roundToInt
 
 @HiltViewModel
 class SettingsViewModel @Inject constructor(
@@ -133,15 +133,6 @@ fun SettingsScreen(
     onBack: () -> Unit,
     viewModel: SettingsViewModel = hiltViewModel(),
 ) {
-    var text by remember {
-        mutableStateOf(
-            viewModel.bufferSizeGb.let {
-                if (it == it.toLong().toFloat()) it.toLong().toString() else it.toString()
-            },
-        )
-    }
-    var isError by remember { mutableStateOf(false) }
-
     Scaffold(
         topBar = {
             TopAppBar(
@@ -256,7 +247,7 @@ fun SettingsScreen(
 
             HorizontalDivider(modifier = Modifier.padding(vertical = 8.dp))
 
-            Text("Multiroom web player", style = MaterialTheme.typography.titleMedium)
+            Text("Web player", style = MaterialTheme.typography.titleMedium)
             val webAutoplay by viewModel.webAutoplay.collectAsStateWithLifecycle()
             Row(
                 modifier = Modifier.fillMaxWidth(),
@@ -295,25 +286,25 @@ fun SettingsScreen(
             HorizontalDivider(modifier = Modifier.padding(vertical = 8.dp))
 
             // Compact rows (label + info-behind-(i) + tight control), ported from QC's
-            // dense Settings. Buffer keeps a narrow decimal field (fractional GB); sleep
-            // and stations use +/- steppers with tap-to-type. NOTE: the VM exposes these as
-            // plain SharedPreferences-backed vars (not snapshot state), so each row holds a
-            // local mutableStateOf and writes through - reading the var alone won't recompose.
-            BufferRow(
+            // dense Settings. Buffer, sleep and stations all use +/- steppers with
+            // tap-to-type. NOTE: the VM exposes these as plain SharedPreferences-backed
+            // vars (not snapshot state), so each row holds a local mutableStateOf and
+            // writes through - reading the var alone won't recompose. Buffer is stored as
+            // fractional GB (Float) but stepped in whole GB, so round on read + widen on write.
+            var bufferGb by remember {
+                mutableStateOf(viewModel.bufferSizeGb.roundToInt().coerceAtLeast(1))
+            }
+            IntStepperRow(
                 title = "Download buffer",
                 info = "Maximum disk space for downloaded tracks (GB). " +
                     "The oldest track is deleted when the buffer is full.",
-                value = text,
-                isError = isError,
-                onValueChange = { input ->
-                    text = input
-                    val parsed = input.toFloatOrNull()
-                    if (parsed != null && parsed > 0f) {
-                        isError = false
-                        viewModel.bufferSizeGb = parsed
-                    } else {
-                        isError = input.isNotBlank()
-                    }
+                unit = "GB",
+                value = bufferGb,
+                range = 1..50,
+                step = 1,
+                onValueChange = {
+                    bufferGb = it
+                    viewModel.bufferSizeGb = it.toFloat()
                 },
             )
 
@@ -438,33 +429,6 @@ private fun LabelWithInfo(title: String, info: String, modifier: Modifier = Modi
             title = { Text(title) },
             text = { Text(info, style = MaterialTheme.typography.bodyMedium) },
             confirmButton = { TextButton(onClick = { showInfo = false }) { Text("Got it") } },
-        )
-    }
-}
-
-// Buffer is fractional GB over a wide range, so it keeps a narrow decimal field rather
-// than a stepper (the field is ~96dp instead of the old 160dp island).
-@Composable
-private fun BufferRow(
-    title: String,
-    info: String,
-    value: String,
-    isError: Boolean,
-    onValueChange: (String) -> Unit,
-) {
-    Row(
-        modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp),
-        verticalAlignment = Alignment.CenterVertically,
-    ) {
-        LabelWithInfo(title, info, modifier = Modifier.weight(1f))
-        OutlinedTextField(
-            value = value,
-            onValueChange = onValueChange,
-            label = { Text("GB") },
-            isError = isError,
-            singleLine = true,
-            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal),
-            modifier = Modifier.width(96.dp),
         )
     }
 }
