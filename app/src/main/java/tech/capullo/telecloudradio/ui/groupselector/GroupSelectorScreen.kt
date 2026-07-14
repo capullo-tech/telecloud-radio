@@ -55,7 +55,6 @@ import kotlinx.coroutines.withContext
 import tech.capullo.audio.snapcast.DiscoveredSnapserver
 import tech.capullo.audio.ui.LocalRadiosSection
 import tech.capullo.source.telegram.data.telegram.TelegramChat
-import tech.capullo.telecloudradio.snapcast.SnapcastPorts
 import tech.capullo.telecloudradio.ui.snapcast.SnapcastViewModel
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -81,9 +80,10 @@ fun GroupSelectorScreen(
         snapViewModel.connect(server.hostAddress, server.port, server.httpPort)
         onJoinServer(server.hostAddress, server.port, server.serviceName.ifBlank { server.hostAddress })
     }
-    val onJoinManual: (host: String, port: Int, httpPort: Int) -> Unit = { host, port, httpPort ->
-        snapViewModel.connect(host, port, httpPort)
-        onJoinServer(host, port, host)
+    val onJoinManual: (host: String, typedPort: Int?) -> Unit = { host, typedPort ->
+        // The stream port resolves asynchronously (listen.json fetch); navigation only needs the name.
+        snapViewModel.connectManually(host, typedPort)
+        onJoinServer(host, 0, host)
     }
 
     // Auto-navigate when sync completes; reset to group list so coming back shows the list
@@ -176,7 +176,7 @@ private fun ChatList(
     bottomContentPadding: Dp,
     onSelect: (TelegramChat) -> Unit,
     onJoinDiscovered: (DiscoveredSnapserver) -> Unit,
-    onJoinManual: (host: String, port: Int, httpPort: Int) -> Unit,
+    onJoinManual: (host: String, typedPort: Int?) -> Unit,
     photoLoader: suspend (TelegramChat) -> String?,
 ) {
     LazyColumn(
@@ -184,14 +184,12 @@ private fun ChatList(
         contentPadding = PaddingValues(bottom = bottomContentPadding),
     ) {
         item {
-            // Shared radar/scanning section (tech.capullo.audio.ui). TC broadcasts on dynamic ports,
-            // so the SnapcastPorts fallbacks apply only to a bare manual host with no ":port" typed.
+            // Shared radar/scanning section (tech.capullo.audio.ui). TC broadcasts on dynamic ports;
+            // manual entry passes the typed port through and the VM resolves the stream port (listen.json).
             LocalRadiosSection(
                 servers = servers,
                 onJoinServer = onJoinDiscovered,
                 onJoinManual = onJoinManual,
-                fallbackStreamPort = SnapcastPorts.STREAM,
-                fallbackHttpPort = SnapcastPorts.HTTP,
             )
         }
         if (chats.isEmpty()) {
