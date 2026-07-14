@@ -5,7 +5,7 @@
 # junit) comes from the shared `libs` catalog.
 [versions]
 # capullo-audio (Layer 2) — immutable jitpack commit; engine + capullo-audio-ui share it.
-capulloAudio = "cee3d58"
+capulloAudio = "ac9f75e"
 # capullo-source-telegram (Layer 3) — brings lib-tdlib-android transitively.
 capulloSourceTelegram = "82d065e"
 # lib-snapcast-android (Layer 0). MUST equal capullo-audio's libSnapcast pin: TC depends on it BOTH
