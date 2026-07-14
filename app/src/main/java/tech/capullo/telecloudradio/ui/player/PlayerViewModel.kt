@@ -902,6 +902,7 @@ class PlayerViewModel @Inject constructor(
             isLoading = false,
             audioMeta = audioMeta,
         )
+        activeTrackRepository.updateTrack(displayTrack)
         activeTrackRepository.updateAlbumArt(albumArt)
 
         // No embedded or cached art - fetch online in the background (Deezer → iTunes);

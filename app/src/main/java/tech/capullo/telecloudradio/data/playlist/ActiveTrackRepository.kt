@@ -36,6 +36,12 @@ class ActiveTrackRepository @Inject constructor() {
         _activePlayback.value = _activePlayback.value?.copy(albumArt = albumArt)
     }
 
+    // Replace the track with the tag-resolved one (title/artist read from the file after
+    // download) so the snapcast/web now-playing shows the real title/artist, not the filename.
+    fun updateTrack(track: MediaMessageEntity) {
+        _activePlayback.value = _activePlayback.value?.copy(track = track)
+    }
+
     fun updateIsPlaying(isPlaying: Boolean) {
         _activePlayback.value = _activePlayback.value?.copy(isPlaying = isPlaying)
     }
