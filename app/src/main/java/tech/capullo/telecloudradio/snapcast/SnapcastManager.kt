@@ -228,6 +228,22 @@ class SnapcastManager @Inject constructor(
         snapcontrolPlugin?.notifyPropertiesChanged()
     }
 
+    /**
+     * Explicit user PLAY: reclaim the speaker for our local snapclient. [AudioFocusController.request]
+     * unconditionally (re)acquires audio focus, so a co-broadcasting app's local snapclient is evicted
+     * (its focus listener gets AUDIOFOCUS_LOSS and stops); [AudioFocusController.refocus] then restarts
+     * our own snapclient if a prior focus loss had stopped it. Focus is otherwise only requested at
+     * broadcast start, so without this a play/app-switch never forces the other app to yield the
+     * speaker. No-op when not broadcasting (audioFocus is null → no local snapclient to arbitrate); the
+     * broadcast ExoPlayer/snapserver are untouched, so web/LAN listeners keep streaming either way.
+     */
+    fun reclaimAudioFocus() {
+        audioFocus?.let {
+            it.request()
+            it.refocus()
+        }
+    }
+
     // Written next to the served index.html (snapserver doc_root); the web
     // player fetches webcfg.json on load. Missing file → web defaults apply
     // (debug hidden, no autoplay). Toggles take effect on the page's next reload.

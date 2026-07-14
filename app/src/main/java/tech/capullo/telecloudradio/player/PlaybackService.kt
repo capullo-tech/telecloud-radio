@@ -234,6 +234,11 @@ class PlaybackService : MediaSessionService() {
                     // tee stalls READY forever.
                     fifoSink?.enableWrites()
                     snapcastManager.startBroadcast(snapNowPlaying, snapController)
+                    // Explicit play (also an app-switch back to us): reclaim audio focus so the
+                    // other broadcasting app's local snapclient is evicted and only this device
+                    // is audible. startBroadcast() no-ops after the first play, so this is the
+                    // only re-request on a subsequent resume.
+                    snapcastManager.reclaimAudioFocus()
                 }
                 publishNowPlaying()
             }
