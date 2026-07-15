@@ -24,13 +24,13 @@ import androidx.compose.foundation.gestures.detectHorizontalDragGestures
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.ExperimentalLayoutApi
 import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
-import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
@@ -438,23 +438,27 @@ private fun PortraitPlayer(
     anyConnected: Boolean,
     onOpenClients: () -> Unit,
 ) {
-    // Bottom-pinned transport: the art is top-anchored (fixed square) and the track
-    // info grows DOWNWARD into the flexible weight(1f) gap, so async metadata (codec
-    // row, reactions/uploader) appearing a beat after the track loads — or a track
-    // change — never re-centers the group and shifts the buttons. (Was Arrangement.Center,
-    // which moved the whole art+info+transport stack on any info-height change.)
+    // Fit-to-space layout. The art is the SOLE weight holder; the track info and the transport
+    // (seek + controls + secondary row) are fixed, non-weighted siblings, so the layout hands the
+    // art exactly the space left after them — at any font scale or metadata density, with no magic
+    // reserve constant. The art is a square capped at the screen width: full-width when it fits,
+    // shrinking only when the screen genuinely can't fit full art + info + transport. It can never
+    // overlap or squeeze them (that squeeze was the bug). BottomCenter keeps the art hugging the
+    // info below; any slack on a tall screen sits above the art.
     Column(
         modifier = Modifier.fillMaxSize().padding(bottom = 8.dp),
         horizontalAlignment = Alignment.CenterHorizontally,
     ) {
-        // Edge-to-edge square art, no corner radius
-        AlbumArtDisplay(
-            albumArt = state.albumArt,
-            modifier = Modifier
-                .fillMaxWidth()
-                .aspectRatio(1f)
-                .artGestures(viewModel),
-        )
+        BoxWithConstraints(
+            modifier = Modifier.weight(1f).fillMaxWidth(),
+            contentAlignment = Alignment.BottomCenter,
+        ) {
+            val artSide = minOf(maxWidth, maxHeight)
+            AlbumArtDisplay(
+                albumArt = state.albumArt,
+                modifier = Modifier.size(artSide).artGestures(viewModel),
+            )
+        }
         Spacer(Modifier.height(16.dp))
         state.track?.let {
             Column(
@@ -470,9 +474,7 @@ private fun PortraitPlayer(
                 )
             }
         }
-        // Flexible gap absorbs all art/metadata height variation so the transport
-        // below holds a fixed bottom position — the buttons never jump on track change.
-        Spacer(Modifier.weight(1f))
+        Spacer(Modifier.height(16.dp))
         Column(
             horizontalAlignment = Alignment.CenterHorizontally,
             verticalArrangement = Arrangement.spacedBy(14.dp),
@@ -588,36 +590,41 @@ private fun ListenInPlayer(
             )
         },
     ) { padding ->
-        // Same bottom-pin as PortraitPlayer: art top-anchored, info grows into the
-        // flexible gap, transport pinned to the bottom — so the buttons appearing/
-        // disappearing (canGoNext/canPlay toggling) never shifts the art.
+        // Same fit-to-space layout as PortraitPlayer: transport is a fixed sibling (never
+        // squeezed), art+info share the flexible region above, art sized by available space
+        // so buttons appearing/disappearing (canGoNext/canPlay toggling) never shifts it.
         Column(
             modifier = Modifier.fillMaxSize().padding(padding).padding(bottom = 8.dp),
             horizontalAlignment = Alignment.CenterHorizontally,
         ) {
-            AlbumArtDisplay(
-                albumArt = state.remoteArt,
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .aspectRatio(1f)
-                    .pointerInput(props?.canGoNext, props?.canGoPrevious) {
-                        var totalDrag = 0f
-                        detectHorizontalDragGestures(
-                            onDragStart = { totalDrag = 0f },
-                            onHorizontalDrag = { change, dragAmount ->
-                                change.consume()
-                                totalDrag += dragAmount
-                            },
-                            onDragEnd = {
-                                val threshold = 90.dp.toPx()
-                                when {
-                                    totalDrag <= -threshold && props?.canGoNext == true -> onControl("next")
-                                    totalDrag >= threshold && props?.canGoPrevious == true -> onControl("previous")
-                                }
-                            },
-                        )
-                    },
-            )
+            BoxWithConstraints(
+                modifier = Modifier.weight(1f).fillMaxWidth(),
+                contentAlignment = Alignment.BottomCenter,
+            ) {
+                val artSide = minOf(maxWidth, maxHeight)
+                AlbumArtDisplay(
+                    albumArt = state.remoteArt,
+                    modifier = Modifier
+                        .size(artSide)
+                        .pointerInput(props?.canGoNext, props?.canGoPrevious) {
+                            var totalDrag = 0f
+                            detectHorizontalDragGestures(
+                                onDragStart = { totalDrag = 0f },
+                                onHorizontalDrag = { change, dragAmount ->
+                                    change.consume()
+                                    totalDrag += dragAmount
+                                },
+                                onDragEnd = {
+                                    val threshold = 90.dp.toPx()
+                                    when {
+                                        totalDrag <= -threshold && props?.canGoNext == true -> onControl("next")
+                                        totalDrag >= threshold && props?.canGoPrevious == true -> onControl("previous")
+                                    }
+                                },
+                            )
+                        },
+                )
+            }
             Spacer(Modifier.height(16.dp))
             Column(
                 horizontalAlignment = Alignment.CenterHorizontally,
@@ -657,7 +664,7 @@ private fun ListenInPlayer(
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
             }
-            Spacer(Modifier.weight(1f))
+            Spacer(Modifier.height(16.dp))
             // Transport pinned to the bottom, shown only when the remote stream allows
             // it (hidden when the broadcaster has locked control — mirrors the web now-playing).
             Row(
