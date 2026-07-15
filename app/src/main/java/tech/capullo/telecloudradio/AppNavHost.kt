@@ -17,6 +17,7 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -168,6 +169,10 @@ private fun MiniPlayer(
         Row(
             modifier = Modifier
                 .clickable(onClick = onClick)
+                // Pad the CONTENT above the system nav bar (the Surface bg still fills
+                // edge-to-edge behind it): this overlay is drawn in a raw Box, not a
+                // Scaffold, so it gets no automatic bottom inset under enableEdgeToEdge().
+                .navigationBarsPadding()
                 .padding(start = 12.dp, top = 8.dp, bottom = 8.dp, end = 4.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
