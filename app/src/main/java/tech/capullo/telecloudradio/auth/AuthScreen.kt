@@ -9,7 +9,6 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
-import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.OutlinedTextFieldDefaults
@@ -66,8 +65,11 @@ fun AuthScreen(onAuthenticated: () -> Unit, viewModel: AuthViewModel = hiltViewM
                 CodeInputForm(onSubmit = viewModel::submitCode, submitting = submitting)
             is AuthState.WaitPassword ->
                 PasswordInputForm(onSubmit = viewModel::submitPassword, submitting = submitting)
-            is AuthState.Ready ->
-                CircularProgressIndicator()
+            is AuthState.Ready -> {
+                // Authenticated - the LaunchedEffect above navigates away immediately. Render nothing
+                // rather than a spinner: the destination shows its own loading, so a spinner here only
+                // produces a redundant spinner→spinner flash during the login transition.
+            }
             is AuthState.Error ->
                 Text(
                     text = (authState as AuthState.Error).message,
