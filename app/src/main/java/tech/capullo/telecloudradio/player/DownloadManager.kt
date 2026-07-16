@@ -32,6 +32,12 @@ class DownloadManager @Inject constructor(
     // The track currently playing — never evicted by enforceBuffer
     @Volatile var activeMessageId: Long? = null
 
+    // The prefetch window (current + upcoming tracks) — pinned so enforceBuffer can't evict the
+    // very track it just prefetched. Without this, prefetching N+2 could evict N+1 (the "next"
+    // track), leaving the Next button greyed with nothing to re-download it. Kept in sync by the
+    // player whenever the queue position moves.
+    @Volatile var protectedMessageIds: Set<Long> = emptySet()
+
     suspend fun ensureDownloaded(chatId: Long, messageId: Long): String? {
         downloadedFiles[messageId]?.let { path ->
             if (File(path).exists()) {
@@ -123,7 +129,10 @@ class DownloadManager @Inject constructor(
         val limitBytes = (settings.bufferSizeGb * 1024 * 1024 * 1024).toLong()
         while (totalDownloadedBytes() > limitBytes) {
             val oldest = downloadedFiles.keys
-                .firstOrNull { it != currentMessageId && it != activeMessageId } ?: break
+                .firstOrNull {
+                    it != currentMessageId && it != activeMessageId &&
+                        it !in protectedMessageIds
+                } ?: break
             evict(oldest)
         }
     }
