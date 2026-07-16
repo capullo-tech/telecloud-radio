@@ -70,6 +70,10 @@ data class PlayerUiState(
     val currentPosition: Long = 0L,
     val trackDuration: Long = 0L,
     val isOffline: Boolean = false,
+    // Download progress (0f..1f) of the current/active track while it's downloading, so the play
+    // button can show a determinate ring instead of an indeterminate spinner. Null before the first
+    // progress tick (or once the file is on disk) → the button falls back to indeterminate.
+    val downloadProgress: Float? = null,
     val audioMeta: AudioMetadata? = null,
     val showStats: Boolean = false,
     val audioAnalysis: AudioAnalysisEntity? = null,
@@ -198,6 +202,12 @@ class PlayerViewModel @Inject constructor(
         }
         viewModelScope.launch {
             downloadManager.downloadProgress.collect { map ->
+                // Active-track progress → determinate ring on the play button (independent of the
+                // next-track wiring below). Null once the download finishes / isn't in flight.
+                val activeProgress = downloadManager.activeMessageId?.let { map[it] }
+                if (_uiState.value.downloadProgress != activeProgress) {
+                    _uiState.value = _uiState.value.copy(downloadProgress = activeProgress)
+                }
                 val nextId = nextIndex()?.let { playlist.getOrNull(it)?.messageId }
                 val progress = nextId?.let { map[it] }
                 if (progress != null) {
@@ -851,6 +861,7 @@ class PlayerViewModel @Inject constructor(
         _uiState.value = _uiState.value.copy(
             track = track,
             isLoading = true,
+            downloadProgress = null,
             currentIndex = index,
             albumArt = null,
             currentPosition = 0L,

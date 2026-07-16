@@ -33,7 +33,11 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           tag="${{ github.ref_name }}"
-          gh release create "$tag" --generate-notes
+          # Idempotent: on a RE-CUT the tag is force-moved and this workflow re-runs while the GitHub
+          # Release from the prior cut still exists — a bare `gh release create` would fail with HTTP
+          # 422 "already exists". Create only if absent; the upload below is already --clobber, so the
+          # whole job is safely re-runnable without the manual `gh release delete` dance.
+          gh release view "$tag" >/dev/null 2>&1 || gh release create "$tag" --generate-notes
           apk_file=$(find ./artifacts -name "*.apk" | head -1)
           # Rename the file itself (gh's `#label` only sets a display label, not the asset name).
           cp "$apk_file" "telecloud-radio-$tag.apk"

@@ -15,7 +15,7 @@ android {
         applicationId = "tech.capullo.telecloudradio"
         minSdk = 24
         targetSdk = 36
-        versionCode = 5
+        versionCode = 6
         versionName = "1.0"
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }
@@ -114,13 +114,14 @@ dependencies {
 
     // capullo-audio (Layer 2) — the delivery engine's public transport classes: SnapserverProcess,
     // SnapclientProcess, SnapcastControlClient, SnapcontrolPlugin, FIFO sink, BalanceAudioProcessor
-    // (re-exports capullo-audio-contracts as api). Brings lib-snapcast-android + ktor transitively.
+    // (re-exports capullo-audio-contracts as api). Brings lib-snapcast-android (the native
+    // snapserver/snapclient/snapcontrol .so binaries) + ktor transitively — no direct lib-snapcast
+    // pin here on purpose: a direct pin would race capullo-audio's transitive one on version
+    // conflict and could package a stale .so (green build, dead control plane). QC does the same.
     implementation(pins.capullo.audio)
     implementation(pins.capullo.audio.ui) // shared control sheet + QR dialog
 
-    // Snapcast multiroom broadcast: native snapserver/snapclient binaries +
     // ktor WebSocket client for the Snapcast JSON-RPC control API
-    implementation(pins.lib.snapcast.android)
     implementation(libs.ktor.client.okhttp)
     implementation(libs.ktor.client.websockets)
     implementation(libs.ktor.serialization.kotlinx.json)

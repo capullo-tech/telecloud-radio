@@ -1,8 +1,11 @@
 package tech.capullo.telecloudradio.auth
 
+import android.content.Context
+import android.content.Intent
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import dagger.hilt.android.lifecycle.HiltViewModel
+import dagger.hilt.android.qualifiers.ApplicationContext
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
@@ -12,6 +15,7 @@ import javax.inject.Inject
 
 @HiltViewModel
 class AuthViewModel @Inject constructor(
+    @ApplicationContext private val context: Context,
     private val repository: TelegramRepository,
     private val credentials: CredentialsRepository,
 ) : ViewModel() {
@@ -20,6 +24,13 @@ class AuthViewModel @Inject constructor(
 
     private val _error = MutableStateFlow<String?>(null)
     val error = _error.asStateFlow()
+
+    // Set when Telegram rejects the saved API ID/Hash. This only surfaces at the PHONE step (TDLib
+    // validates the api_id there, not at SetTdlibParameters), by which point authState has already
+    // advanced to WaitPhone and the credentials form is no longer shown — stranding the user. The
+    // screen shows a recovery dialog on this flag whose action re-enters the credentials flow.
+    private val _credentialsInvalid = MutableStateFlow(false)
+    val credentialsInvalid = _credentialsInvalid.asStateFlow()
 
     // True while an auth request is in flight. The screen disables the submit button on it so a
     // double-tap can't fire two authorization requests to TDLib ("another authentication is
@@ -57,11 +68,37 @@ class AuthViewModel @Inject constructor(
             try {
                 step()
             } catch (e: Throwable) {
-                _error.value = e.message
+                if (isCredentialError(e)) {
+                    _credentialsInvalid.value = true
+                } else {
+                    _error.value = e.message
+                }
             } finally {
                 _submitting.value = false
             }
         }
+    }
+
+    // Telegram reports bad API credentials as API_ID_INVALID (and, when the same public api_id is
+    // over-used, API_ID_PUBLISHED_FLOOD) — matched on the message since it arrives as a generic
+    // TelegramException. These are unrecoverable in place, hence the credentials-reset path.
+    private fun isCredentialError(e: Throwable): Boolean {
+        val msg = e.message?.uppercase() ?: return false
+        return "API_ID_INVALID" in msg || "API_ID_PUBLISHED_FLOOD" in msg
+    }
+
+    // Recovery for a stranded WaitPhone-with-bad-creds session: drop the saved credentials and
+    // restart the process. A fresh start with no credentials returns TDLib to WaitTdlibParameters →
+    // the credentials form. This is the app-only reset — TDLib can't re-run SetTdlibParameters in
+    // process once past it, and TelegramClient exposes no logout. No DB wipe: api_id is a per-launch
+    // SetTdlibParameters argument (not baked into the local DB) and no session ever completed.
+    fun resetCredentials() {
+        credentials.clear()
+        context.packageManager
+            .getLaunchIntentForPackage(context.packageName)
+            ?.apply { addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TASK) }
+            ?.let { context.startActivity(it) }
+        Runtime.getRuntime().exit(0)
     }
 
     fun clearError() {
