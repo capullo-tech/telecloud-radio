@@ -5,6 +5,8 @@ import androidx.lifecycle.viewModelScope
 import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.debounce
+import kotlinx.coroutines.flow.drop
 import kotlinx.coroutines.launch
 import tech.capullo.source.telegram.data.telegram.TelegramChat
 import tech.capullo.telecloudradio.data.SettingsRepository
@@ -40,7 +42,17 @@ class GroupSelectorViewModel @Inject constructor(
     private val photoPathCache = ConcurrentHashMap<Long, String>()
 
     init {
+        // Initial load with the current value, then reload live whenever the "Stations" setting
+        // changes - so the list repopulates immediately instead of only on (re)entry (E2). drop(1)
+        // skips the StateFlow's replayed current value (already loaded here); debounce coalesces the
+        // rapid steps of the settings stepper into a single re-query.
         loadGroups()
+        viewModelScope.launch {
+            settings.stationLimit
+                .drop(1)
+                .debounce(400)
+                .collect { loadGroups(it) }
+        }
     }
 
     // Returns the local path to the crisp avatar for [chat], downloading it once and caching per
@@ -55,7 +67,7 @@ class GroupSelectorViewModel @Inject constructor(
         return path
     }
 
-    fun loadGroups(limit: Int = settings.stationLimit) = viewModelScope.launch {
+    fun loadGroups(limit: Int = settings.stationLimit.value) = viewModelScope.launch {
         _uiState.value = GroupSelectorUiState.Loading
         runCatching { repository.getAudioGroups(limit) }
             .onSuccess { _uiState.value = GroupSelectorUiState.Loaded(it) }

@@ -38,6 +38,16 @@ class CredentialsRepository @Inject constructor(
             .apply()
     }
 
+    // Clears the saved API ID/Hash so the next launch starts back at the credentials form. Keeps
+    // DB_KEY_PREF (the local-DB encryption key) - it is not user-supplied and re-generating it would
+    // needlessly orphan the encrypted TDLib database. Used by the api-invalid recovery path.
+    fun clear() {
+        prefs.edit()
+            .remove("telegram_api_id")
+            .remove("telegram_api_hash")
+            .apply()
+    }
+
     companion object {
         private const val DB_KEY_PREF = "telegram_db_encryption_key"
     }

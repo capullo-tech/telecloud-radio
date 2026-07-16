@@ -28,11 +28,16 @@ class SettingsRepository @Inject constructor(@ApplicationContext context: Contex
 
     // How many Telegram chats to fetch for the station list. This is a fetch cap;
     // the displayed count can be a little lower after non-group/channel chats are filtered out.
-    var stationLimit: Int
-        get() = prefs.getInt("station_limit", 20)
-        set(value) {
-            prefs.edit().putInt("station_limit", value.coerceIn(1, 200)).apply()
-        }
+    // A flow so the station-selector re-queries live when the setting changes, instead of only
+    // picking it up on (re)entry.
+    private val _stationLimit = MutableStateFlow(prefs.getInt("station_limit", 20))
+    val stationLimit: StateFlow<Int> = _stationLimit.asStateFlow()
+
+    fun setStationLimit(value: Int) {
+        val clamped = value.coerceIn(1, 200)
+        prefs.edit().putInt("station_limit", clamped).apply()
+        _stationLimit.value = clamped
+    }
 
     // Sleep timer duration in minutes; the timer itself lives in PlayerViewModel
     var sleepTimerMinutes: Int

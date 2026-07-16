@@ -13,6 +13,7 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import dagger.hilt.android.AndroidEntryPoint
 import tech.capullo.telecloudradio.data.SettingsRepository
 import tech.capullo.telecloudradio.data.ThemeMode
+import tech.capullo.telecloudradio.snapcast.SnapcastManager
 import tech.capullo.telecloudradio.ui.theme.TelecloudRadioTheme
 import javax.inject.Inject
 
@@ -20,6 +21,27 @@ import javax.inject.Inject
 class MainActivity : ComponentActivity() {
 
     @Inject lateinit var settings: SettingsRepository
+
+    @Inject lateinit var snapcastManager: SnapcastManager
+
+    override fun onStart() {
+        super.onStart()
+        // Bringing TC to the foreground reclaims the speaker for our local snapclient:
+        // reclaimAudioFocus() does request()+refocus(), evicting whatever else holds audio focus
+        // (another app, or a co-broadcasting QuantumCast on this device) and restarting our
+        // snapclient if a prior focus loss had stopped it. No-op when not broadcasting (audioFocus
+        // is null) and idempotent when we already hold focus, so cold launch / rotation are
+        // harmless. Without this, the broadcast ExoPlayer stays isPlaying=true forever, so
+        // onIsPlayingChanged fires only on the first play - a plain app-switch back to TC never
+        // reclaimed. Deliberately more eager than a normal media app (which grabs the speaker only
+        // on explicit play, never on mere foreground): the point is "I switched to TC, take over."
+        // FUTURE (on/off setting): the only case where always-stealing could annoy is QC + TC
+        // BOTH broadcasting on one device and you foreground TC just to glance - it silences QC
+        // here (QC keeps broadcasting to other rooms). If that ever bites, gate this call behind a
+        // SettingsRepository "reclaim speaker when opened" toggle (default on), mirroring
+        // stationLimit/balance/themeMode: if (settings.reclaimOnForeground.value) reclaim...().
+        snapcastManager.reclaimAudioFocus()
+    }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)

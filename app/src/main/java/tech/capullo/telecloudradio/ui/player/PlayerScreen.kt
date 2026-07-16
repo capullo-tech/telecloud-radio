@@ -805,7 +805,18 @@ private fun ControlBar(state: PlayerUiState, viewModel: PlayerViewModel) {
                 )
             }
             if (state.isLoading) {
-                CircularProgressIndicator(modifier = Modifier.size(76.dp), strokeWidth = 2.dp)
+                val downloadProgress = state.downloadProgress
+                if (downloadProgress != null) {
+                    // Downloading the whole track before playback - show real progress, not a
+                    // "stuck"-looking indeterminate spinner. Falls back to indeterminate pre-tick.
+                    CircularProgressIndicator(
+                        progress = { downloadProgress },
+                        modifier = Modifier.size(76.dp),
+                        strokeWidth = 2.dp,
+                    )
+                } else {
+                    CircularProgressIndicator(modifier = Modifier.size(76.dp), strokeWidth = 2.dp)
+                }
             }
         }
         IconButton(

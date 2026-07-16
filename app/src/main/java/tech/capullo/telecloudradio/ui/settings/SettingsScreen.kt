@@ -106,9 +106,9 @@ class SettingsViewModel @Inject constructor(
         }
 
     var stationLimit: Int
-        get() = settings.stationLimit
+        get() = settings.stationLimit.value
         set(value) {
-            settings.stationLimit = value
+            settings.setStationLimit(value)
         }
 
     val themeMode: StateFlow<ThemeMode> = settings.themeMode

@@ -41,6 +41,7 @@ fun AuthScreen(onAuthenticated: () -> Unit, viewModel: AuthViewModel = hiltViewM
     val authState by viewModel.authState.collectAsStateWithLifecycle()
     val error by viewModel.error.collectAsStateWithLifecycle()
     val submitting by viewModel.submitting.collectAsStateWithLifecycle()
+    val credentialsInvalid by viewModel.credentialsInvalid.collectAsStateWithLifecycle()
 
     LaunchedEffect(authState) {
         if (authState is AuthState.Ready) onAuthenticated()
@@ -56,7 +57,11 @@ fun AuthScreen(onAuthenticated: () -> Unit, viewModel: AuthViewModel = hiltViewM
             is AuthState.WaitParameters, is AuthState.Unknown ->
                 CredentialsForm(onSubmit = viewModel::submitCredentials)
             is AuthState.WaitPhone ->
-                PhoneInputForm(onSubmit = viewModel::submitPhone, submitting = submitting)
+                PhoneInputForm(
+                    onSubmit = viewModel::submitPhone,
+                    submitting = submitting,
+                    onChangeCredentials = viewModel::resetCredentials,
+                )
             is AuthState.WaitCode ->
                 CodeInputForm(onSubmit = viewModel::submitCode, submitting = submitting)
             is AuthState.WaitPassword ->
@@ -76,6 +81,25 @@ fun AuthScreen(onAuthenticated: () -> Unit, viewModel: AuthViewModel = hiltViewM
             onDismissRequest = viewModel::clearError,
             confirmButton = { TextButton(onClick = viewModel::clearError) { Text("OK") } },
             text = { Text(msg) },
+        )
+    }
+
+    // Bad API ID/Hash rejected at the phone step: the credentials form is no longer reachable, so
+    // offer the only way out - clear the saved creds and restart back to the form. Not dismissable,
+    // because dismissing would just return to the stranded phone screen.
+    if (credentialsInvalid) {
+        AlertDialog(
+            onDismissRequest = {},
+            confirmButton = {
+                TextButton(onClick = viewModel::resetCredentials) { Text("Re-enter credentials") }
+            },
+            title = { Text("Invalid API credentials") },
+            text = {
+                Text(
+                    "Telegram rejected the API ID / Hash you entered. Re-enter your credentials " +
+                        "from my.telegram.org to continue.",
+                )
+            },
         )
     }
 }
@@ -144,7 +168,11 @@ private fun CredentialsForm(onSubmit: (apiId: String, apiHash: String) -> Unit) 
 }
 
 @Composable
-private fun PhoneInputForm(onSubmit: (String) -> Unit, submitting: Boolean) {
+private fun PhoneInputForm(
+    onSubmit: (String) -> Unit,
+    submitting: Boolean,
+    onChangeCredentials: () -> Unit,
+) {
     var phone by remember { mutableStateOf("") }
     Column(
         horizontalAlignment = Alignment.CenterHorizontally,
@@ -166,6 +194,13 @@ private fun PhoneInputForm(onSubmit: (String) -> Unit, submitting: Boolean) {
             modifier = Modifier.fillMaxWidth(),
         ) {
             Text("Continue")
+        }
+        // Always-available escape from the phone step back to the credentials form. This is the
+        // catch-all for a stranded bad-credentials session - the AlertDialog above only fires on the
+        // recognized API_ID_INVALID / API_ID_PUBLISHED_FLOOD message, whereas this doesn't depend on
+        // matching TDLib's error string, so any wrong-creds dead-end here is still recoverable.
+        TextButton(onClick = onChangeCredentials, enabled = !submitting) {
+            Text("Change API credentials")
         }
     }
 }
