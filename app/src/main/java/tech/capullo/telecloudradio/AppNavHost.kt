@@ -93,13 +93,16 @@ fun AppNavHost(appViewModel: AppViewModel = hiltViewModel()) {
                 entry<AuthRoute> {
                     AuthScreen(onAuthenticated = {
                         val dest = appViewModel.getAutoOpenDestination()
+                        // Replace AuthRoute (the only backstack entry here — auth sub-states live
+                        // inside AuthScreen, not as separate routes) with the home root instead of
+                        // stacking on top of it. Leaving AuthRoute underneath meant Back from home
+                        // didn't exit the app: it popped to the now-authenticated AuthScreen, which
+                        // flashed its Ready spinner and immediately re-navigated forward (the
+                        // "two-spinner" bounce). In-place set avoids a momentarily-empty backstack;
+                        // the optional add() below still yields a single NavDisplay transition.
+                        backStack[0] = GroupSelectorRoute
                         if (dest != null) {
-                            // addAll is atomic: NavDisplay renders one transition, not two
-                            backStack.addAll(
-                                listOf(GroupSelectorRoute, PlayerRoute(dest.first, dest.second)),
-                            )
-                        } else {
-                            backStack.add(GroupSelectorRoute)
+                            backStack.add(PlayerRoute(dest.first, dest.second))
                         }
                     })
                 }
