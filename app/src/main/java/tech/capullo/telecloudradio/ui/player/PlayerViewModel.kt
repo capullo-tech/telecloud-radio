@@ -117,6 +117,7 @@ class PlayerViewModel @Inject constructor(
     private var playlist: List<MediaMessageEntity> = emptyList()
     private var currentIndex = 0
     private var prefetchJob: Job? = null
+    private var readinessJob: Job? = null
     private var positionJob: Job? = null
     private var sleepTimerJob: Job? = null
 
@@ -203,9 +204,12 @@ class PlayerViewModel @Inject constructor(
         viewModelScope.launch {
             downloadManager.downloadProgress.collect { map ->
                 // Active-track progress → determinate ring on the play button (independent of the
-                // next-track wiring below). Null once the download finishes / isn't in flight.
+                // next-track wiring below). Only *raise* it here; the map entry is torn down the
+                // instant the download returns (before playback is prepared), so nulling it here
+                // would snap the ring back to empty mid-load. playTrack owns resetting it to null
+                // at the start of a load and to 1f on completion, so the ring lands full.
                 val activeProgress = downloadManager.activeMessageId?.let { map[it] }
-                if (_uiState.value.downloadProgress != activeProgress) {
+                if (activeProgress != null && _uiState.value.downloadProgress != activeProgress) {
                     _uiState.value = _uiState.value.copy(downloadProgress = activeProgress)
                 }
                 val nextId = nextIndex()?.let { playlist.getOrNull(it)?.messageId }
@@ -233,8 +237,14 @@ class PlayerViewModel @Inject constructor(
         }
     }
 
+    // Cancel-replace: each call supersedes any in-flight readiness check. Without this, the
+    // suspending isDownloaded() below means the *last coroutine to finish* wins rather than the
+    // last one called - an older, stale check (e.g. from a reorder that was immediately undone,
+    // or an orphaned refresher spawned inside prefetchAhead that prefetchJob.cancel() doesn't
+    // reach) could land its `false` last and wedge the Next button grey with nothing to re-run it.
     private fun refreshNextTrackState() {
-        viewModelScope.launch {
+        readinessJob?.cancel()
+        readinessJob = viewModelScope.launch {
             val ni = nextIndex()
             val nextId = ni?.let { playlist.getOrNull(it)?.messageId }
             _uiState.value = _uiState.value.copy(
@@ -887,13 +897,26 @@ class PlayerViewModel @Inject constructor(
                 if (playlist.isNotEmpty()) {
                     playTrack(index.coerceAtMost(playlist.size - 1))
                 } else {
-                    _uiState.value =
-                        _uiState.value.copy(isLoading = false, error = "No tracks left in queue")
+                    _uiState.value = _uiState.value.copy(
+                        isLoading = false,
+                        downloadProgress = null,
+                        error = "No tracks left in queue",
+                    )
                 }
                 return
             }
-            _uiState.value = _uiState.value.copy(isLoading = false, error = "Download failed")
+            _uiState.value = _uiState.value.copy(
+                isLoading = false,
+                downloadProgress = null,
+                error = "Download failed",
+            )
             return
+        }
+        // If this load actually downloaded (ring was showing determinate progress), land it on
+        // full so it visibly completes instead of snapping back to empty when the map entry is
+        // torn down. Cached skips never set downloadProgress, so they show no ring at all.
+        if (_uiState.value.downloadProgress != null) {
+            _uiState.value = _uiState.value.copy(downloadProgress = 1f)
         }
 
         val (albumArt, audioMeta) = withContext(Dispatchers.IO) {
@@ -911,6 +934,7 @@ class PlayerViewModel @Inject constructor(
             track = displayTrack,
             albumArt = albumArt,
             isLoading = false,
+            downloadProgress = null,
             audioMeta = audioMeta,
         )
         activeTrackRepository.updateTrack(displayTrack)
@@ -974,10 +998,34 @@ class PlayerViewModel @Inject constructor(
         }
     }
 
+    // The prefetch window: the current track + the next up-to-2 tracks. Wraps to the top under
+    // repeat-all so index 0 (the real "next" when sitting on the last row) is included; a plain
+    // range would skip it, leaving that track un-prefetched and evictable - Next greys there.
+    private fun prefetchWindow(fromIndex: Int): List<Int> {
+        if (fromIndex !in playlist.indices) return emptyList()
+        val window = mutableListOf(fromIndex)
+        var i = fromIndex
+        while (window.size < 3) {
+            i = when {
+                i + 1 < playlist.size -> i + 1
+                _uiState.value.repeatMode == Player.REPEAT_MODE_ALL -> 0
+                else -> break
+            }
+            if (i in window) break // wrapped fully around a short playlist - stop
+            window.add(i)
+        }
+        return window
+    }
+
     private fun prefetchAhead(fromIndex: Int) {
         prefetchJob?.cancel()
+        val window = prefetchWindow(fromIndex)
+        // Pin the current + upcoming tracks so enforceBuffer (which runs as each prefetch lands)
+        // can't evict a track we just prefetched - the window matches the loop below.
+        downloadManager.protectedMessageIds =
+            window.mapNotNull { playlist.getOrNull(it)?.messageId }.toSet()
         prefetchJob = viewModelScope.launch {
-            for (i in (fromIndex + 1)..minOf(fromIndex + 2, playlist.size - 1)) {
+            for (i in window.drop(1)) {
                 val t = playlist[i]
                 val path = downloadManager.getCachedPath(t.messageId)
                     ?: downloadManager.ensureDownloaded(t.chatId, t.messageId)
@@ -1093,6 +1141,7 @@ class PlayerViewModel @Inject constructor(
 
     override fun onCleared() {
         prefetchJob?.cancel()
+        readinessJob?.cancel()
         positionJob?.cancel()
         sleepTimerJob?.cancel()
         controller?.release()

@@ -804,19 +804,16 @@ private fun ControlBar(state: PlayerUiState, viewModel: PlayerViewModel) {
                     modifier = Modifier.size(40.dp),
                 )
             }
-            if (state.isLoading) {
-                val downloadProgress = state.downloadProgress
-                if (downloadProgress != null) {
-                    // Downloading the whole track before playback - show real progress, not a
-                    // "stuck"-looking indeterminate spinner. Falls back to indeterminate pre-tick.
-                    CircularProgressIndicator(
-                        progress = { downloadProgress },
-                        modifier = Modifier.size(76.dp),
-                        strokeWidth = 2.dp,
-                    )
-                } else {
-                    CircularProgressIndicator(modifier = Modifier.size(76.dp), strokeWidth = 2.dp)
-                }
+            // Ring only when the track must fully download before it can play (Telegram has no
+            // streaming) - determinate, so it fills and lands on full. Cached skips prepare almost
+            // instantly and show no ring, so the button no longer flashes a meaningless spinner.
+            val downloadProgress = state.downloadProgress
+            if (downloadProgress != null) {
+                CircularProgressIndicator(
+                    progress = { downloadProgress },
+                    modifier = Modifier.size(76.dp),
+                    strokeWidth = 2.dp,
+                )
             }
         }
         IconButton(
