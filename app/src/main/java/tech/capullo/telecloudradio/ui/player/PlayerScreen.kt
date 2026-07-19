@@ -35,11 +35,13 @@ import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.lazy.rememberLazyListState
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
@@ -125,6 +127,10 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.blur
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.drawWithContent
+import androidx.compose.ui.geometry.CornerRadius
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.graphics.graphicsLayer
@@ -1513,6 +1519,9 @@ private fun ScrollToTopFab(visible: Boolean, modifier: Modifier = Modifier, onCl
     }
 }
 
+// Cap filter dropdowns at ~7.5 menu items; the clipped partial item is the scroll affordance.
+private val FILTER_MENU_MAX_HEIGHT = 360.dp
+
 @Composable
 private fun QueueFilterChip(
     label: String,
@@ -1522,6 +1531,12 @@ private fun QueueFilterChip(
     onClear: () -> Unit,
 ) {
     var expanded by remember { mutableStateOf(false) }
+    val scrollState = rememberScrollState()
+    val outlineColor = MaterialTheme.colorScheme.outline
+    // Menus reopen at the top - don't carry the previous scroll position across openings.
+    LaunchedEffect(expanded) {
+        if (expanded) scrollState.scrollTo(0)
+    }
     Box {
         FilterChip(
             selected = selected.isNotEmpty(),
@@ -1547,7 +1562,44 @@ private fun QueueFilterChip(
                 }
             },
         )
-        DropdownMenu(expanded = expanded, onDismissRequest = { expanded = false }) {
+        DropdownMenu(
+            expanded = expanded,
+            onDismissRequest = { expanded = false },
+            scrollState = scrollState,
+            modifier = Modifier
+                .heightIn(max = FILTER_MENU_MAX_HEIGHT)
+                .drawWithContent {
+                    drawContent()
+                    val maxValue = scrollState.maxValue
+                    if (maxValue <= 0) return@drawWithContent
+
+                    val trackWidthPx = 4.dp.toPx()
+                    val trackPaddingPx = 4.dp.toPx()
+                    val menuHeight = size.height
+                    val contentHeight = menuHeight + maxValue
+                    val thumbHeight = (menuHeight * (menuHeight / contentHeight)).coerceAtLeast(16.dp.toPx())
+                    val scrollProgress = scrollState.value.toFloat() / maxValue
+                    val thumbOffset = trackPaddingPx + (menuHeight - thumbHeight - 2 * trackPaddingPx) * scrollProgress
+                    val trackLeft = size.width - trackWidthPx - trackPaddingPx
+
+                    val trackColor = outlineColor.copy(alpha = 0.2f)
+                    val thumbColor = outlineColor.copy(alpha = 0.6f)
+                    val cornerRadius = CornerRadius(trackWidthPx / 2f)
+
+                    drawRoundRect(
+                        color = trackColor,
+                        topLeft = Offset(trackLeft, trackPaddingPx),
+                        size = Size(trackWidthPx, menuHeight - 2 * trackPaddingPx),
+                        cornerRadius = cornerRadius,
+                    )
+                    drawRoundRect(
+                        color = thumbColor,
+                        topLeft = Offset(trackLeft, thumbOffset),
+                        size = Size(trackWidthPx, thumbHeight),
+                        cornerRadius = cornerRadius,
+                    )
+                },
+        ) {
             options.forEach { option ->
                 val isSelected = option in selected
                 DropdownMenuItem(
