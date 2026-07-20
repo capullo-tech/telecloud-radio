@@ -78,7 +78,7 @@ android {
 }
 
 dependencies {
-    // TDLib client + models (Layer 3): brings lib-tdlib-android (libtdjni.so + org.drinkless.tdlib)
+    // Telegram source: brings lib-tdlib-android (libtdjni.so + org.drinkless.tdlib)
     // transitively. Replaces Telecloud's own :tdlib module + TelegramClient/TdLibTelegramClient copies.
     implementation(pins.capullo.source.telegram)
 
@@ -112,7 +112,7 @@ dependencies {
     implementation(libs.kotlinx.coroutines.android)
     implementation("net.jthink:jaudiotagger:3.0.1")
 
-    // capullo-audio (Layer 2) - the delivery engine's public transport classes: SnapserverProcess,
+    // capullo-audio - the delivery engine's public transport classes: SnapserverProcess,
     // SnapclientProcess, SnapcastControlClient, SnapcontrolPlugin, FIFO sink, BalanceAudioProcessor
     // (re-exports capullo-audio-contracts as api). Brings lib-snapcast-android (the native
     // snapserver/snapclient/snapcontrol .so binaries) + ktor transitively - no direct lib-snapcast
