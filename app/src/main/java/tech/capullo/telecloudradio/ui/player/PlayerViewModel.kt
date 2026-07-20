@@ -868,22 +868,33 @@ class PlayerViewModel @Inject constructor(
     private suspend fun playTrack(index: Int) {
         currentIndex = index
         val track = playlist[index]
-        _uiState.value = _uiState.value.copy(
-            track = track,
-            isLoading = true,
-            downloadProgress = null,
-            currentIndex = index,
-            albumArt = null,
-            currentPosition = 0L,
-            trackDuration = 0L,
-            audioMeta = null,
-            audioAnalysis = null,
-            showStats = false,
-            showReactions = false,
-            reactionsInfo = null,
-        )
-        activeTrackRepository.set(track, chatId, chatTitle)
-        saveLastPlayed(chatId, track.messageId)
+        // The previous song keeps playing for the whole download, so the screen must keep showing
+        // ITS metadata: swapping here captioned the audible track with the pending one's title/art
+        // (and did the same to the mini-player and lock screen via activeTrackRepository). Every
+        // user-visible field is deferred until the file is ready; only the loading flags move now,
+        // leaving the play button's download ring as the feedback that the tap registered.
+        // Only defer while something is actually AUDIBLE - paused, resting on a freshly loaded
+        // station, or first play, there is nothing to misrepresent, so swapping straight away is
+        // both truthful and better feedback than a stale (or blank) player.
+        val audibleTrack = _uiState.value.track != null && _uiState.value.isPlaying
+        _uiState.value = if (!audibleTrack) {
+            _uiState.value.copy(
+                track = track,
+                isLoading = true,
+                downloadProgress = null,
+                currentIndex = index,
+                albumArt = null,
+                currentPosition = 0L,
+                trackDuration = 0L,
+                audioMeta = null,
+                audioAnalysis = null,
+                showStats = false,
+                showReactions = false,
+                reactionsInfo = null,
+            )
+        } else {
+            _uiState.value.copy(isLoading = true, downloadProgress = null)
+        }
 
         downloadManager.activeMessageId = track.messageId
         val path = downloadManager.ensureDownloaded(track.chatId, track.messageId)
@@ -930,13 +941,26 @@ class PlayerViewModel @Inject constructor(
             title = audioMeta.tagTitle ?: track.title,
             performer = audioMeta.tagArtist ?: track.performer,
         )
+        // The file is ready and playback is about to start, so the swap is finally truthful. This
+        // carries the fields deferred above, not just the metadata.
         _uiState.value = _uiState.value.copy(
             track = displayTrack,
             albumArt = albumArt,
             isLoading = false,
             downloadProgress = null,
             audioMeta = audioMeta,
+            currentIndex = index,
+            currentPosition = 0L,
+            trackDuration = 0L,
+            audioAnalysis = null,
+            showStats = false,
+            showReactions = false,
+            reactionsInfo = null,
         )
+        // Deferred too: the mini-player/lock screen must not name the new track while the old one
+        // is still audible, and a download that never completes must not be recorded as last-played.
+        activeTrackRepository.set(track, chatId, chatTitle)
+        saveLastPlayed(chatId, track.messageId)
         activeTrackRepository.updateTrack(displayTrack)
         activeTrackRepository.updateAlbumArt(albumArt)
 
