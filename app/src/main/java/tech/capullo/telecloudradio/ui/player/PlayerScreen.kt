@@ -40,7 +40,6 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyListState
-import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.rememberScrollState
@@ -1368,68 +1367,59 @@ private fun LibraryTab(
         )
     }
     SheetSearchField(value = draft.search, onValueChange = { draft = draft.copy(search = it) })
-    // LazyRow + contentPadding (not a padded Row): the chips now overflow with Sort added, so they
-    // must scroll and bleed to both edges instead of being squeezed.
-    LazyRow(
+    // Everything wraps together in one FlowRow - the three filter chips plus the Sort toggle. Sort
+    // is icon-only (just the arrow, no label) to stay narrow, so it sits at the end when there's
+    // room and wraps along with the rest otherwise. Nothing scrolls or hides.
+    FlowRow(
+        modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 2.dp),
         horizontalArrangement = Arrangement.spacedBy(8.dp),
-        contentPadding = PaddingValues(horizontal = 16.dp, vertical = 2.dp),
-        modifier = Modifier.fillMaxWidth(),
+        verticalArrangement = Arrangement.spacedBy(4.dp),
     ) {
-        item {
-            QueueFilterChip(
-                label = "Uploader",
-                selected = draft.uploaders,
-                options = uploaderOptions,
-                onToggle = { v ->
-                    draft = draft.copy(
-                        uploaders = if (v in draft.uploaders) draft.uploaders - v else draft.uploaders + v,
-                    )
-                },
-                onClear = { draft = draft.copy(uploaders = emptySet()) },
-            )
-        }
-        item {
-            QueueFilterChip(
-                label = "Date",
-                selected = draft.months,
-                options = dateOptions,
-                onToggle = { v ->
-                    draft = draft.copy(
-                        months = if (v in draft.months) draft.months - v else draft.months + v,
-                    )
-                },
-                onClear = { draft = draft.copy(months = emptySet()) },
-            )
-        }
-        item {
-            QueueFilterChip(
-                label = "Ext",
-                selected = draft.extensions,
-                options = extOptions,
-                onToggle = { v ->
-                    draft = draft.copy(
-                        extensions = if (v in draft.extensions) draft.extensions - v else draft.extensions + v,
-                    )
-                },
-                onClear = { draft = draft.copy(extensions = emptySet()) },
-            )
-        }
-        item {
-            // Selected only when non-default (oldest-first), mirroring the queue order button's
-            // tint-when-not-newest convention.
-            FilterChip(
-                selected = !sortNewestFirst,
-                onClick = { sortNewestFirst = !sortNewestFirst },
-                label = { Text(if (sortNewestFirst) "Newest" else "Oldest") },
-                leadingIcon = {
-                    Icon(
-                        if (sortNewestFirst) Icons.Default.ArrowDownward else Icons.Default.ArrowUpward,
-                        contentDescription = if (sortNewestFirst) "Newest first" else "Oldest first",
-                        modifier = Modifier.size(18.dp),
-                    )
-                },
-            )
-        }
+        QueueFilterChip(
+            label = "Uploader",
+            selected = draft.uploaders,
+            options = uploaderOptions,
+            onToggle = { v ->
+                draft = draft.copy(
+                    uploaders = if (v in draft.uploaders) draft.uploaders - v else draft.uploaders + v,
+                )
+            },
+            onClear = { draft = draft.copy(uploaders = emptySet()) },
+        )
+        QueueFilterChip(
+            label = "Date",
+            selected = draft.months,
+            options = dateOptions,
+            onToggle = { v ->
+                draft = draft.copy(
+                    months = if (v in draft.months) draft.months - v else draft.months + v,
+                )
+            },
+            onClear = { draft = draft.copy(months = emptySet()) },
+        )
+        QueueFilterChip(
+            label = "Ext",
+            selected = draft.extensions,
+            options = extOptions,
+            onToggle = { v ->
+                draft = draft.copy(
+                    extensions = if (v in draft.extensions) draft.extensions - v else draft.extensions + v,
+                )
+            },
+            onClear = { draft = draft.copy(extensions = emptySet()) },
+        )
+        // Icon-only Sort toggle - tinted (selected) when non-default (oldest-first).
+        FilterChip(
+            selected = !sortNewestFirst,
+            onClick = { sortNewestFirst = !sortNewestFirst },
+            label = {
+                Icon(
+                    if (sortNewestFirst) Icons.Default.ArrowDownward else Icons.Default.ArrowUpward,
+                    contentDescription = if (sortNewestFirst) "Newest first" else "Oldest first",
+                    modifier = Modifier.size(18.dp),
+                )
+            },
+        )
     }
     if (draft != appliedFilters || draft.isActive) {
         Row(
