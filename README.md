@@ -20,9 +20,9 @@ front-end, being recomposed onto the platform's shared libraries:
 - **[capullo-audio](https://github.com/capullo-tech/capullo-audio)** - the
   delivery engine (ExoPlayer → FIFO → Snapcast server/client) and multi-device
   control.
-- **[capullo-source-telegram](https://github.com/capullo-tech/capullo-source-telegram)**
-  - the Telegram source (TDLib client, download manager, playlist queue) behind
-  the `capullo-audio-contracts` SPI.
+- **[capullo-source-telegram](https://github.com/capullo-tech/capullo-source-telegram)** - the
+  Telegram source (TDLib client, download manager, playlist queue) behind the
+  `capullo-audio-contracts` SPI.
 
 The engine and the source are siblings - both implement/consume the SPI and
 neither depends on the other; this app is what wires them together. See
