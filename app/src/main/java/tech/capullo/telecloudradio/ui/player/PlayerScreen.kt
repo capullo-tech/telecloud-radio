@@ -52,7 +52,6 @@ import androidx.compose.material.icons.filled.ArrowUpward
 import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.filled.Close
-import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Download
 import androidx.compose.material.icons.filled.DragHandle
 import androidx.compose.material.icons.filled.Equalizer
@@ -86,7 +85,6 @@ import androidx.compose.material.icons.outlined.Report
 import androidx.compose.material.icons.outlined.Timer
 import androidx.compose.material.icons.outlined.VolumeUp
 import androidx.compose.material.icons.outlined.Warning
-import androidx.compose.material3.BottomSheetDefaults
 import androidx.compose.material3.Button
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.DropdownMenu
@@ -111,16 +109,12 @@ import androidx.compose.material3.SnackbarDuration
 import androidx.compose.material3.SnackbarHost
 import androidx.compose.material3.SnackbarHostState
 import androidx.compose.material3.Surface
-import androidx.compose.material3.SwipeToDismissBox
-import androidx.compose.material3.SwipeToDismissBoxState
-import androidx.compose.material3.SwipeToDismissBoxValue
 import androidx.compose.material3.Tab
 import androidx.compose.material3.TabRow
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
 import androidx.compose.material3.rememberModalBottomSheetState
-import androidx.compose.material3.rememberSwipeToDismissBoxState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.derivedStateOf
@@ -1251,13 +1245,6 @@ private fun QueueTab(
                     track = track,
                     isCurrent = qIdx == currentIndex,
                     onClick = { onPlayAt(qIdx) },
-                    // Swipes address the carried queue index, not the visible position - search
-                    // makes the two diverge (see `visible` above).
-                    onSwipeRight = { onQueuePlayNext(qIdx) },
-                    onSwipeLeft = { onQueueRemove(qIdx) },
-                    swipeLeftLabel = "Remove",
-                    swipeLeftIcon = Icons.Default.Delete,
-                    swipeLeftDismisses = true,
                     modifier = Modifier
                         .zIndex(if (isDragging) 1f else 0f)
                         .graphicsLayer { translationY = if (isDragging) dragOffsetY else 0f },
@@ -1453,10 +1440,6 @@ private fun LibraryTab(
                     track = track,
                     isCurrent = false,
                     onClick = { onPlayNow(track) },
-                    onSwipeRight = { onPlayNext(track) },
-                    onSwipeLeft = { onAddToQueue(track) },
-                    swipeLeftLabel = "Add to queue",
-                    swipeLeftIcon = Icons.AutoMirrored.Filled.QueueMusic,
                 ) { dismiss ->
                     DropdownMenuItem(
                         text = { Text("Play next") },
@@ -1500,7 +1483,7 @@ private fun SheetSearchField(value: String, onValueChange: (String) -> Unit) {
     )
 }
 
-@OptIn(androidx.compose.foundation.ExperimentalFoundationApi::class, ExperimentalMaterial3Api::class)
+@OptIn(androidx.compose.foundation.ExperimentalFoundationApi::class)
 @Composable
 private fun TrackRow(
     track: MediaMessageEntity,
@@ -1508,101 +1491,57 @@ private fun TrackRow(
     onClick: () -> Unit,
     modifier: Modifier = Modifier,
     trailing: (@Composable () -> Unit)? = null,
-    // Swipe shortcuts mirror this row's two long-press actions: right = "Play next" (both tabs),
-    // left = the tab's secondary action. Null disables that direction.
-    onSwipeRight: (() -> Unit)? = null,
-    onSwipeLeft: (() -> Unit)? = null,
-    swipeLeftLabel: String = "",
-    swipeLeftIcon: ImageVector = Icons.Default.Delete,
-    swipeLeftDismisses: Boolean = false,
     menuItems: @Composable (dismiss: () -> Unit) -> Unit,
 ) {
     var menuOpen by remember { mutableStateOf(false) }
-    val row: @Composable (Modifier) -> Unit = { rowModifier ->
-        Box(modifier = rowModifier) {
-            ListItem(
-                headlineContent = {
+    Box(modifier = modifier) {
+        ListItem(
+            headlineContent = {
+                Text(
+                    track.title ?: track.fileName ?: "Unknown",
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = if (isCurrent) {
+                        MaterialTheme.colorScheme.primary
+                    } else {
+                        MaterialTheme.colorScheme.onSurface
+                    },
+                )
+            },
+            supportingContent = {
+                val artist = track.performer
+                val uploader = extractUploader(track.caption)
+                    ?: extractUploaderFromFilename(track.fileName)
+                val duration = track.duration?.takeIf { it > 0 }?.let { formatDuration(it) }
+                val date = formatTelegramDate(track.date)
+                val parts = listOfNotNull(
+                    artist?.takeIf { it.isNotBlank() },
+                    uploader?.takeIf { it.isNotBlank() },
+                    duration,
+                    date,
+                )
+                if (parts.isNotEmpty()) {
                     Text(
-                        track.title ?: track.fileName ?: "Unknown",
+                        parts.joinToString(" · "),
                         maxLines = 1,
                         overflow = TextOverflow.Ellipsis,
-                        style = MaterialTheme.typography.bodyMedium,
-                        color = if (isCurrent) {
-                            MaterialTheme.colorScheme.primary
-                        } else {
-                            MaterialTheme.colorScheme.onSurface
-                        },
+                        style = MaterialTheme.typography.bodySmall,
                     )
-                },
-                supportingContent = {
-                    val artist = track.performer
-                    val uploader = extractUploader(track.caption)
-                        ?: extractUploaderFromFilename(track.fileName)
-                    val duration = track.duration?.takeIf { it > 0 }?.let { formatDuration(it) }
-                    val date = formatTelegramDate(track.date)
-                    val parts = listOfNotNull(
-                        artist?.takeIf { it.isNotBlank() },
-                        uploader?.takeIf { it.isNotBlank() },
-                        duration,
-                        date,
-                    )
-                    if (parts.isNotEmpty()) {
-                        Text(
-                            parts.joinToString(" · "),
-                            maxLines = 1,
-                            overflow = TextOverflow.Ellipsis,
-                            style = MaterialTheme.typography.bodySmall,
-                        )
-                    }
-                },
-                trailingContent = trailing,
-                colors = ListItemDefaults.colors(containerColor = Color.Transparent),
-                modifier = Modifier.combinedClickable(
-                    onClick = onClick,
-                    onLongClick = { menuOpen = true },
-                ),
-            )
-            DropdownMenu(expanded = menuOpen, onDismissRequest = { menuOpen = false }) {
-                menuItems { menuOpen = false }
-            }
+                }
+            },
+            trailingContent = trailing,
+            colors = ListItemDefaults.colors(containerColor = Color.Transparent),
+            modifier = Modifier.combinedClickable(
+                onClick = onClick,
+                onLongClick = { menuOpen = true },
+            ),
+        )
+        DropdownMenu(expanded = menuOpen, onDismissRequest = { menuOpen = false }) {
+            menuItems { menuOpen = false }
         }
     }
-    // `modifier` carries the queue's drag-to-reorder zIndex/translation, so it belongs on the
-    // outermost node - above the swipe box - or a dragged row won't lift over its siblings.
-    Column(modifier = modifier) {
-        if (onSwipeRight == null && onSwipeLeft == null) {
-            row(Modifier)
-        } else {
-            val swipeState = rememberSwipeToDismissBoxState(
-                confirmValueChange = { value ->
-                    when (value) {
-                        SwipeToDismissBoxValue.StartToEnd -> {
-                            onSwipeRight?.invoke()
-                            false // fire and snap back - "Play next" never removes the row
-                        }
-                        SwipeToDismissBoxValue.EndToStart -> {
-                            onSwipeLeft?.invoke()
-                            swipeLeftDismisses // only a destructive action lets the row leave
-                        }
-                        SwipeToDismissBoxValue.Settled -> true // never block the return to rest
-                    }
-                },
-            )
-            SwipeToDismissBox(
-                state = swipeState,
-                enableDismissFromStartToEnd = onSwipeRight != null,
-                enableDismissFromEndToStart = onSwipeLeft != null,
-                backgroundContent = {
-                    SwipeBackground(swipeState, swipeLeftLabel, swipeLeftIcon, swipeLeftDismisses)
-                },
-            ) {
-                // Rows are transparent over the sheet; without an opaque fill the reveal would
-                // show THROUGH the track text mid-swipe. Match the sheet's own container color.
-                row(Modifier.fillMaxWidth().background(BottomSheetDefaults.ContainerColor))
-            }
-        }
-        HorizontalDivider()
-    }
+    HorizontalDivider()
 }
 
 @Composable
@@ -1656,50 +1595,6 @@ private fun Modifier.verticalScrollbar(
 
 @Composable
 private fun scrollbarColor(): Color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.5f)
-
-/**
- * Revealed behind a row while swiping: right (start->end) is always "Play next"; left (end->start)
- * is the row's secondary action, tinted as an error when it is destructive (queue remove).
- */
-@OptIn(ExperimentalMaterial3Api::class)
-@Composable
-private fun SwipeBackground(
-    state: SwipeToDismissBoxState,
-    leftLabel: String,
-    leftIcon: ImageVector,
-    leftDestructive: Boolean,
-) {
-    val toEnd = state.dismissDirection == SwipeToDismissBoxValue.StartToEnd
-    val toStart = state.dismissDirection == SwipeToDismissBoxValue.EndToStart
-    if (!toEnd && !toStart) return
-    val bg = when {
-        toEnd -> MaterialTheme.colorScheme.primaryContainer
-        leftDestructive -> MaterialTheme.colorScheme.errorContainer
-        else -> MaterialTheme.colorScheme.secondaryContainer
-    }
-    val fg = when {
-        toEnd -> MaterialTheme.colorScheme.onPrimaryContainer
-        leftDestructive -> MaterialTheme.colorScheme.onErrorContainer
-        else -> MaterialTheme.colorScheme.onSecondaryContainer
-    }
-    val icon = if (toEnd) Icons.Default.SkipNext else leftIcon
-    val label = if (toEnd) "Play next" else leftLabel
-    Row(
-        modifier = Modifier.fillMaxSize().background(bg).padding(horizontal = 20.dp),
-        horizontalArrangement = if (toEnd) Arrangement.Start else Arrangement.End,
-        verticalAlignment = Alignment.CenterVertically,
-    ) {
-        if (!toEnd) {
-            Text(label, style = MaterialTheme.typography.labelLarge, color = fg)
-            Spacer(Modifier.size(8.dp))
-        }
-        Icon(icon, contentDescription = label, tint = fg)
-        if (toEnd) {
-            Spacer(Modifier.size(8.dp))
-            Text(label, style = MaterialTheme.typography.labelLarge, color = fg)
-        }
-    }
-}
 
 @Composable
 private fun QueueFilterChip(
