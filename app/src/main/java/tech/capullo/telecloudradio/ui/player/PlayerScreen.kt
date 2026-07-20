@@ -39,6 +39,8 @@ import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.LazyListState
+import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.rememberScrollState
@@ -51,6 +53,7 @@ import androidx.compose.material.icons.filled.ArrowUpward
 import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.filled.Close
+import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Download
 import androidx.compose.material.icons.filled.DragHandle
 import androidx.compose.material.icons.filled.Equalizer
@@ -84,6 +87,7 @@ import androidx.compose.material.icons.outlined.Report
 import androidx.compose.material.icons.outlined.Timer
 import androidx.compose.material.icons.outlined.VolumeUp
 import androidx.compose.material.icons.outlined.Warning
+import androidx.compose.material3.BottomSheetDefaults
 import androidx.compose.material3.Button
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.DropdownMenu
@@ -108,12 +112,16 @@ import androidx.compose.material3.SnackbarDuration
 import androidx.compose.material3.SnackbarHost
 import androidx.compose.material3.SnackbarHostState
 import androidx.compose.material3.Surface
+import androidx.compose.material3.SwipeToDismissBox
+import androidx.compose.material3.SwipeToDismissBoxState
+import androidx.compose.material3.SwipeToDismissBoxValue
 import androidx.compose.material3.Tab
 import androidx.compose.material3.TabRow
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
 import androidx.compose.material3.rememberModalBottomSheetState
+import androidx.compose.material3.rememberSwipeToDismissBoxState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.derivedStateOf
@@ -141,6 +149,7 @@ import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.zIndex
@@ -1231,7 +1240,11 @@ private fun QueueTab(
     SheetSearchField(value = search, onValueChange = { search = it })
     val canReorder = search.isBlank()
     Box(modifier = Modifier.fillMaxSize()) {
-        LazyColumn(state = listState, contentPadding = PaddingValues(bottom = 32.dp)) {
+        LazyColumn(
+            state = listState,
+            contentPadding = PaddingValues(bottom = 32.dp),
+            modifier = Modifier.fillMaxSize().verticalScrollbar(listState, scrollbarColor()),
+        ) {
             itemsIndexed(visible, key = { _, iv -> iv.index }) { _, indexed ->
                 val (qIdx, track) = indexed
                 val isDragging = draggingQueueIndex == qIdx
@@ -1239,6 +1252,13 @@ private fun QueueTab(
                     track = track,
                     isCurrent = qIdx == currentIndex,
                     onClick = { onPlayAt(qIdx) },
+                    // Swipes address the carried queue index, not the visible position - search
+                    // makes the two diverge (see `visible` above).
+                    onSwipeRight = { onQueuePlayNext(qIdx) },
+                    onSwipeLeft = { onQueueRemove(qIdx) },
+                    swipeLeftLabel = "Remove",
+                    swipeLeftIcon = Icons.Default.Delete,
+                    swipeLeftDismisses = true,
                     modifier = Modifier
                         .zIndex(if (isDragging) 1f else 0f)
                         .graphicsLayer { translationY = if (isDragging) dragOffsetY else 0f },
@@ -1320,6 +1340,12 @@ private fun LibraryTab(
     val extOptions = remember(library) { library.mapNotNull(::extensionKey).distinct().sorted() }
 
     val filtered = remember(library, draft) { library.filter(draft::matches) }
+    // View-only sort: not part of `draft`, so it applies immediately and never gates "Apply to
+    // queue". The library already arrives newest-first, so the default is a no-op reversal.
+    var sortNewestFirst by remember { mutableStateOf(true) }
+    val displayed = remember(filtered, sortNewestFirst) {
+        if (sortNewestFirst) filtered else filtered.asReversed()
+    }
     val listState = rememberLazyListState()
     val showScrollToTop by remember { derivedStateOf { listState.firstVisibleItemIndex > 3 } }
     val scope = rememberCoroutineScope()
@@ -1335,43 +1361,68 @@ private fun LibraryTab(
         )
     }
     SheetSearchField(value = draft.search, onValueChange = { draft = draft.copy(search = it) })
-    Row(
+    // LazyRow + contentPadding (not a padded Row): the chips now overflow with Sort added, so they
+    // must scroll and bleed to both edges instead of being squeezed.
+    LazyRow(
         horizontalArrangement = Arrangement.spacedBy(8.dp),
-        modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 2.dp),
+        contentPadding = PaddingValues(horizontal = 16.dp, vertical = 2.dp),
+        modifier = Modifier.fillMaxWidth(),
     ) {
-        QueueFilterChip(
-            label = "Uploader",
-            selected = draft.uploaders,
-            options = uploaderOptions,
-            onToggle = { v ->
-                draft = draft.copy(
-                    uploaders = if (v in draft.uploaders) draft.uploaders - v else draft.uploaders + v,
-                )
-            },
-            onClear = { draft = draft.copy(uploaders = emptySet()) },
-        )
-        QueueFilterChip(
-            label = "Date",
-            selected = draft.months,
-            options = dateOptions,
-            onToggle = { v ->
-                draft = draft.copy(
-                    months = if (v in draft.months) draft.months - v else draft.months + v,
-                )
-            },
-            onClear = { draft = draft.copy(months = emptySet()) },
-        )
-        QueueFilterChip(
-            label = "Ext",
-            selected = draft.extensions,
-            options = extOptions,
-            onToggle = { v ->
-                draft = draft.copy(
-                    extensions = if (v in draft.extensions) draft.extensions - v else draft.extensions + v,
-                )
-            },
-            onClear = { draft = draft.copy(extensions = emptySet()) },
-        )
+        item {
+            QueueFilterChip(
+                label = "Uploader",
+                selected = draft.uploaders,
+                options = uploaderOptions,
+                onToggle = { v ->
+                    draft = draft.copy(
+                        uploaders = if (v in draft.uploaders) draft.uploaders - v else draft.uploaders + v,
+                    )
+                },
+                onClear = { draft = draft.copy(uploaders = emptySet()) },
+            )
+        }
+        item {
+            QueueFilterChip(
+                label = "Date",
+                selected = draft.months,
+                options = dateOptions,
+                onToggle = { v ->
+                    draft = draft.copy(
+                        months = if (v in draft.months) draft.months - v else draft.months + v,
+                    )
+                },
+                onClear = { draft = draft.copy(months = emptySet()) },
+            )
+        }
+        item {
+            QueueFilterChip(
+                label = "Ext",
+                selected = draft.extensions,
+                options = extOptions,
+                onToggle = { v ->
+                    draft = draft.copy(
+                        extensions = if (v in draft.extensions) draft.extensions - v else draft.extensions + v,
+                    )
+                },
+                onClear = { draft = draft.copy(extensions = emptySet()) },
+            )
+        }
+        item {
+            // Selected only when non-default (oldest-first), mirroring the queue order button's
+            // tint-when-not-newest convention.
+            FilterChip(
+                selected = !sortNewestFirst,
+                onClick = { sortNewestFirst = !sortNewestFirst },
+                label = { Text(if (sortNewestFirst) "Newest" else "Oldest") },
+                leadingIcon = {
+                    Icon(
+                        if (sortNewestFirst) Icons.Default.ArrowDownward else Icons.Default.ArrowUpward,
+                        contentDescription = if (sortNewestFirst) "Newest first" else "Oldest first",
+                        modifier = Modifier.size(18.dp),
+                    )
+                },
+            )
+        }
     }
     if (draft != appliedFilters || draft.isActive) {
         Row(
@@ -1395,12 +1446,20 @@ private fun LibraryTab(
         }
     }
     Box(modifier = Modifier.fillMaxSize()) {
-        LazyColumn(state = listState, contentPadding = PaddingValues(bottom = 32.dp)) {
-            itemsIndexed(filtered) { _, track ->
+        LazyColumn(
+            state = listState,
+            contentPadding = PaddingValues(bottom = 32.dp),
+            modifier = Modifier.fillMaxSize().verticalScrollbar(listState, scrollbarColor()),
+        ) {
+            itemsIndexed(displayed) { _, track ->
                 TrackRow(
                     track = track,
                     isCurrent = false,
                     onClick = { onPlayNow(track) },
+                    onSwipeRight = { onPlayNext(track) },
+                    onSwipeLeft = { onAddToQueue(track) },
+                    swipeLeftLabel = "Add to queue",
+                    swipeLeftIcon = Icons.AutoMirrored.Filled.QueueMusic,
                 ) { dismiss ->
                     DropdownMenuItem(
                         text = { Text("Play next") },
@@ -1444,7 +1503,7 @@ private fun SheetSearchField(value: String, onValueChange: (String) -> Unit) {
     )
 }
 
-@OptIn(androidx.compose.foundation.ExperimentalFoundationApi::class)
+@OptIn(androidx.compose.foundation.ExperimentalFoundationApi::class, ExperimentalMaterial3Api::class)
 @Composable
 private fun TrackRow(
     track: MediaMessageEntity,
@@ -1452,57 +1511,101 @@ private fun TrackRow(
     onClick: () -> Unit,
     modifier: Modifier = Modifier,
     trailing: (@Composable () -> Unit)? = null,
+    // Swipe shortcuts mirror this row's two long-press actions: right = "Play next" (both tabs),
+    // left = the tab's secondary action. Null disables that direction.
+    onSwipeRight: (() -> Unit)? = null,
+    onSwipeLeft: (() -> Unit)? = null,
+    swipeLeftLabel: String = "",
+    swipeLeftIcon: ImageVector = Icons.Default.Delete,
+    swipeLeftDismisses: Boolean = false,
     menuItems: @Composable (dismiss: () -> Unit) -> Unit,
 ) {
     var menuOpen by remember { mutableStateOf(false) }
-    Box(modifier = modifier) {
-        ListItem(
-            headlineContent = {
-                Text(
-                    track.title ?: track.fileName ?: "Unknown",
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis,
-                    style = MaterialTheme.typography.bodyMedium,
-                    color = if (isCurrent) {
-                        MaterialTheme.colorScheme.primary
-                    } else {
-                        MaterialTheme.colorScheme.onSurface
-                    },
-                )
-            },
-            supportingContent = {
-                val artist = track.performer
-                val uploader = extractUploader(track.caption)
-                    ?: extractUploaderFromFilename(track.fileName)
-                val duration = track.duration?.takeIf { it > 0 }?.let { formatDuration(it) }
-                val date = formatTelegramDate(track.date)
-                val parts = listOfNotNull(
-                    artist?.takeIf { it.isNotBlank() },
-                    uploader?.takeIf { it.isNotBlank() },
-                    duration,
-                    date,
-                )
-                if (parts.isNotEmpty()) {
+    val row: @Composable (Modifier) -> Unit = { rowModifier ->
+        Box(modifier = rowModifier) {
+            ListItem(
+                headlineContent = {
                     Text(
-                        parts.joinToString(" · "),
+                        track.title ?: track.fileName ?: "Unknown",
                         maxLines = 1,
                         overflow = TextOverflow.Ellipsis,
-                        style = MaterialTheme.typography.bodySmall,
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = if (isCurrent) {
+                            MaterialTheme.colorScheme.primary
+                        } else {
+                            MaterialTheme.colorScheme.onSurface
+                        },
                     )
-                }
-            },
-            trailingContent = trailing,
-            colors = ListItemDefaults.colors(containerColor = Color.Transparent),
-            modifier = Modifier.combinedClickable(
-                onClick = onClick,
-                onLongClick = { menuOpen = true },
-            ),
-        )
-        DropdownMenu(expanded = menuOpen, onDismissRequest = { menuOpen = false }) {
-            menuItems { menuOpen = false }
+                },
+                supportingContent = {
+                    val artist = track.performer
+                    val uploader = extractUploader(track.caption)
+                        ?: extractUploaderFromFilename(track.fileName)
+                    val duration = track.duration?.takeIf { it > 0 }?.let { formatDuration(it) }
+                    val date = formatTelegramDate(track.date)
+                    val parts = listOfNotNull(
+                        artist?.takeIf { it.isNotBlank() },
+                        uploader?.takeIf { it.isNotBlank() },
+                        duration,
+                        date,
+                    )
+                    if (parts.isNotEmpty()) {
+                        Text(
+                            parts.joinToString(" · "),
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
+                            style = MaterialTheme.typography.bodySmall,
+                        )
+                    }
+                },
+                trailingContent = trailing,
+                colors = ListItemDefaults.colors(containerColor = Color.Transparent),
+                modifier = Modifier.combinedClickable(
+                    onClick = onClick,
+                    onLongClick = { menuOpen = true },
+                ),
+            )
+            DropdownMenu(expanded = menuOpen, onDismissRequest = { menuOpen = false }) {
+                menuItems { menuOpen = false }
+            }
         }
     }
-    HorizontalDivider()
+    // `modifier` carries the queue's drag-to-reorder zIndex/translation, so it belongs on the
+    // outermost node - above the swipe box - or a dragged row won't lift over its siblings.
+    Column(modifier = modifier) {
+        if (onSwipeRight == null && onSwipeLeft == null) {
+            row(Modifier)
+        } else {
+            val swipeState = rememberSwipeToDismissBoxState(
+                confirmValueChange = { value ->
+                    when (value) {
+                        SwipeToDismissBoxValue.StartToEnd -> {
+                            onSwipeRight?.invoke()
+                            false // fire and snap back - "Play next" never removes the row
+                        }
+                        SwipeToDismissBoxValue.EndToStart -> {
+                            onSwipeLeft?.invoke()
+                            swipeLeftDismisses // only a destructive action lets the row leave
+                        }
+                        SwipeToDismissBoxValue.Settled -> true // never block the return to rest
+                    }
+                },
+            )
+            SwipeToDismissBox(
+                state = swipeState,
+                enableDismissFromStartToEnd = onSwipeRight != null,
+                enableDismissFromEndToStart = onSwipeLeft != null,
+                backgroundContent = {
+                    SwipeBackground(swipeState, swipeLeftLabel, swipeLeftIcon, swipeLeftDismisses)
+                },
+            ) {
+                // Rows are transparent over the sheet; without an opaque fill the reveal would
+                // show THROUGH the track text mid-swipe. Match the sheet's own container color.
+                row(Modifier.fillMaxWidth().background(BottomSheetDefaults.ContainerColor))
+            }
+        }
+        HorizontalDivider()
+    }
 }
 
 @Composable
@@ -1521,6 +1624,85 @@ private fun ScrollToTopFab(visible: Boolean, modifier: Modifier = Modifier, onCl
 
 // Cap filter dropdowns at ~7.5 menu items; the clipped partial item is the scroll affordance.
 private val FILTER_MENU_MAX_HEIGHT = 360.dp
+
+/**
+ * Compose ships no scrollbar, so draw a thumb from the list's own layout info. Sized/positioned off
+ * the *average* visible item height - exact for these uniform track rows, and cheap. Draws nothing
+ * when the content fits (nothing to scroll).
+ */
+private fun Modifier.verticalScrollbar(
+    state: LazyListState,
+    color: Color,
+    width: Dp = 3.dp,
+    minThumb: Dp = 24.dp,
+): Modifier = drawWithContent {
+    drawContent()
+    val info = state.layoutInfo
+    val visible = info.visibleItemsInfo
+    if (info.totalItemsCount == 0 || visible.isEmpty()) return@drawWithContent
+    val avgItem = visible.sumOf { it.size }.toFloat() / visible.size
+    val viewport = (info.viewportEndOffset - info.viewportStartOffset).toFloat()
+    val content = avgItem * info.totalItemsCount
+    if (content <= viewport) return@drawWithContent
+    val scrolled = visible.first().index * avgItem - visible.first().offset
+    val thumb = (viewport / content * viewport).coerceAtLeast(minThumb.toPx())
+    val maxOffset = viewport - thumb
+    val offset = (scrolled / (content - viewport) * maxOffset).coerceIn(0f, maxOffset)
+    val barWidth = width.toPx()
+    drawRoundRect(
+        color = color,
+        topLeft = Offset(size.width - barWidth, info.viewportStartOffset + offset),
+        size = Size(barWidth, thumb),
+        cornerRadius = CornerRadius(barWidth / 2, barWidth / 2),
+    )
+}
+
+@Composable
+private fun scrollbarColor(): Color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.5f)
+
+/**
+ * Revealed behind a row while swiping: right (start->end) is always "Play next"; left (end->start)
+ * is the row's secondary action, tinted as an error when it is destructive (queue remove).
+ */
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun SwipeBackground(
+    state: SwipeToDismissBoxState,
+    leftLabel: String,
+    leftIcon: ImageVector,
+    leftDestructive: Boolean,
+) {
+    val toEnd = state.dismissDirection == SwipeToDismissBoxValue.StartToEnd
+    val toStart = state.dismissDirection == SwipeToDismissBoxValue.EndToStart
+    if (!toEnd && !toStart) return
+    val bg = when {
+        toEnd -> MaterialTheme.colorScheme.primaryContainer
+        leftDestructive -> MaterialTheme.colorScheme.errorContainer
+        else -> MaterialTheme.colorScheme.secondaryContainer
+    }
+    val fg = when {
+        toEnd -> MaterialTheme.colorScheme.onPrimaryContainer
+        leftDestructive -> MaterialTheme.colorScheme.onErrorContainer
+        else -> MaterialTheme.colorScheme.onSecondaryContainer
+    }
+    val icon = if (toEnd) Icons.Default.SkipNext else leftIcon
+    val label = if (toEnd) "Play next" else leftLabel
+    Row(
+        modifier = Modifier.fillMaxSize().background(bg).padding(horizontal = 20.dp),
+        horizontalArrangement = if (toEnd) Arrangement.Start else Arrangement.End,
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        if (!toEnd) {
+            Text(label, style = MaterialTheme.typography.labelLarge, color = fg)
+            Spacer(Modifier.size(8.dp))
+        }
+        Icon(icon, contentDescription = label, tint = fg)
+        if (toEnd) {
+            Spacer(Modifier.size(8.dp))
+            Text(label, style = MaterialTheme.typography.labelLarge, color = fg)
+        }
+    }
+}
 
 @Composable
 private fun QueueFilterChip(
