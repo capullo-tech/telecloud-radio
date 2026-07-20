@@ -47,7 +47,7 @@ import javax.inject.Inject
  * Playback + Snapcast broadcast service.
  *
  * Audio path: ExoPlayer decodes the track; the sink chain forces the PCM to
- * 44100:16:2 ([ChannelMixing → Sonic] ), applies stereo balance, then a
+ * 48000:16:2 ([ChannelMixing → Sonic] ), applies stereo balance, then a
  * TeeAudioProcessor copies it into the snapserver FIFO. The AudioTrack output
  * stays (it paces playback and provides the position clock) but player volume
  * is 0 - the audible output on this device is the local snapclient, which is
@@ -159,7 +159,7 @@ class PlaybackService : MediaSessionService() {
             it.open()
         }
 
-        // Sink chain: [mix → 2ch] → [resample → 44100] → [balance] → [tee → FIFO].
+        // Sink chain: [mix → 2ch] → [resample → 48000] → [balance] → [tee → FIFO].
         // Balance sits before the tee so every listener (local snapclient, LAN
         // clients, web players) hears the same adjusted stereo image.
         val renderersFactory = object : DefaultRenderersFactory(this) {
@@ -177,7 +177,11 @@ class PlaybackService : MediaSessionService() {
                     // with a MediaCodecAudioRenderer error on e.g. a 5.1 track.
                     for (channels in 3..8) putChannelMixingMatrix(stereoDownmixMatrix(channels))
                 }
-                val resampler = SonicAudioProcessor().apply { setOutputSampleRateHz(44100) }
+                // LOCKSTEP with SnapserverProcess.SAMPLE_FORMAT (48000): the FIFO the tee writes is
+                // read by snapserver at that rate, so this resampler must output the same. 48000
+                // lets 48kHz-native FLAC/Opus pass through with no resample (kills the resync-storm
+                // stutter); 44.1k content upsamples once to 48k.
+                val resampler = SonicAudioProcessor().apply { setOutputSampleRateHz(48000) }
                 return DefaultAudioSink.Builder(context)
                     .setEnableFloatOutput(false) // keep the chain in 16-bit PCM
                     .setAudioProcessorChain(
