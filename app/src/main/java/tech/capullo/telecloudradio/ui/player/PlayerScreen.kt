@@ -1341,10 +1341,17 @@ private fun LibraryTab(
 
     val filtered = remember(library, draft) { library.filter(draft::matches) }
     // View-only sort: not part of `draft`, so it applies immediately and never gates "Apply to
-    // queue". The library already arrives newest-first, so the default is a no-op reversal.
+    // queue". Sort by the actual message `date` (epoch-seconds string), NOT by reversing the
+    // incoming order - the library arrives ordered by messageId, and forwarded/re-posted tracks
+    // carry a high messageId but an older date, so a plain reversal put dates out of sequence.
+    // Null/non-numeric dates sink to the bottom in either direction.
     var sortNewestFirst by remember { mutableStateOf(true) }
     val displayed = remember(filtered, sortNewestFirst) {
-        if (sortNewestFirst) filtered else filtered.asReversed()
+        if (sortNewestFirst) {
+            filtered.sortedByDescending { it.date?.toLongOrNull() ?: Long.MIN_VALUE }
+        } else {
+            filtered.sortedBy { it.date?.toLongOrNull() ?: Long.MAX_VALUE }
+        }
     }
     val listState = rememberLazyListState()
     val showScrollToTop by remember { derivedStateOf { listState.firstVisibleItemIndex > 3 } }
