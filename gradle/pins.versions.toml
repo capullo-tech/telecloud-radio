@@ -1,14 +1,14 @@
-# Telecloud LOCAL pins catalog (`pins.*`) - the inter-repo capullo/L0 coordinates (pinned
-# independently per release, the org) + TC's own single-app deps AND the
+# Telecloud LOCAL pins catalog (`pins.*`) - the inter-repo capullo coordinates (pinned
+# independently per release) + TC's own single-app deps AND the
 # Compose libraries TC deliberately versions OUTSIDE the shared Compose BOM. Everything else
 # (toolchain, BOM-managed Compose, lifecycle, nav3, media3, Room, Hilt, ktor, coroutines, zxing,
 # junit) comes from the shared `libs` catalog.
 [versions]
-# capullo-audio (Layer 2) - immutable jitpack commit; engine + capullo-audio-ui share it.
-capulloAudio = "1f5e908"
-# capullo-source-telegram (Layer 3) - brings lib-tdlib-android transitively.
-capulloSourceTelegram = "d429e97"
-# NOTE: no lib-snapcast-android (Layer 0) pin here. TC gets the native snapcast .so binaries
+# capullo-audio - immutable jitpack commit; engine + capullo-audio-ui share it.
+capulloAudio = "a4c4673b40eae5913e72334905af77495c3177f3"
+# capullo-source-telegram - brings lib-tdlib-android transitively.
+capulloSourceTelegram = "10f94cd4313fc61dd0dd46ad4dd3cb0b020f8cfd"
+# NOTE: no lib-snapcast-android pin here. TC gets the native snapcast .so binaries
 # transitively via capullo-audio (which owns the libSnapcast pin). A direct pin used to live here and
 # had to be kept in lockstep with capullo-audio's - a mismatch let Gradle pick the lexically-higher
 # hash and package a STALE .so (green build, dead control plane, invisible to CI). Removed to kill
