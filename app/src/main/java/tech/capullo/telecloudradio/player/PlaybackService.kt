@@ -93,6 +93,21 @@ class PlaybackService : MediaSessionService() {
         override fun seekTo(positionMs: Long) {} // playlist next/prev only - position not driven here
     }
 
+    // Base64 art is expensive (an 800x800 JPEG → a ~300KB string) and changes only per track, but
+    // buildSnapNowPlaying() runs on every isPlaying flip. Cache the encoding keyed on the source
+    // bytes by identity - the same ByteArray instance is reused for a track's lifetime.
+    private var cachedArtBytes: ByteArray? = null
+    private var cachedArtBase64: String? = null
+
+    private fun artBase64(bytes: ByteArray?): String? {
+        if (bytes == null) return null
+        if (bytes !== cachedArtBytes) {
+            cachedArtBytes = bytes
+            cachedArtBase64 = Base64.encodeToString(bytes, Base64.NO_WRAP)
+        }
+        return cachedArtBase64
+    }
+
     private fun buildSnapNowPlaying(): NowPlaying {
         val playback = activeTrackRepository.activePlayback.value
         val canSkip = playback != null
@@ -100,7 +115,7 @@ class PlaybackService : MediaSessionService() {
             title = playback?.let { it.track.title ?: it.track.fileName } ?: "",
             artist = playback?.track?.performer ?: "",
             album = playback?.chatTitle ?: "",
-            artworkBase64 = playback?.albumArt?.let { Base64.encodeToString(it, Base64.NO_WRAP) },
+            artworkBase64 = artBase64(playback?.albumArt),
             isPlaying = playerIsPlaying,
             canGoNext = canSkip,
             canGoPrevious = canSkip,
@@ -108,9 +123,13 @@ class PlaybackService : MediaSessionService() {
     }
 
     // Push the current metadata to web players / snapclients. Replaces the old
-    // snapcontrolCallbacks + snapcastManager.notifyPropertiesChanged() flow.
+    // snapcontrolCallbacks + snapcastManager.notifyPropertiesChanged() flow. Skips the push when
+    // nothing changed: the resync churn toggles isPlaying rapidly, and re-emitting an identical
+    // (or no-op) state is pure noise for the control plugin.
     private fun publishNowPlaying() {
-        snapNowPlaying.value = buildSnapNowPlaying()
+        val next = buildSnapNowPlaying()
+        if (next == snapNowPlaying.value) return
+        snapNowPlaying.value = next
         snapcastManager.notifyPropertiesChanged()
     }
 
