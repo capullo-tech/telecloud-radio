@@ -17,7 +17,7 @@ android {
         applicationId = "tech.capullo.telecloudradio"
         minSdk = 24
         targetSdk = 36
-        versionCode = 8
+        versionCode = 9
         versionName = "1.0"
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }
