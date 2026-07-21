@@ -19,9 +19,12 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.basicMarquee
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.combinedClickable
+import androidx.compose.foundation.gestures.Orientation
 import androidx.compose.foundation.gestures.detectDragGestures
 import androidx.compose.foundation.gestures.detectHorizontalDragGestures
 import androidx.compose.foundation.gestures.detectTapGestures
+import androidx.compose.foundation.gestures.draggable
+import androidx.compose.foundation.gestures.rememberDraggableState
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
@@ -100,8 +103,8 @@ import androidx.compose.material3.ListItemDefaults
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.PrimaryTabRow
 import androidx.compose.material3.Scaffold
-import androidx.compose.material3.SheetValue
 import androidx.compose.material3.Slider
 import androidx.compose.material3.SliderDefaults
 import androidx.compose.material3.SmallFloatingActionButton
@@ -110,7 +113,6 @@ import androidx.compose.material3.SnackbarHost
 import androidx.compose.material3.SnackbarHostState
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Tab
-import androidx.compose.material3.TabRow
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
@@ -136,6 +138,9 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.input.nestedscroll.NestedScrollConnection
+import androidx.compose.ui.input.nestedscroll.NestedScrollSource
+import androidx.compose.ui.input.nestedscroll.nestedScroll
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.res.painterResource
@@ -143,6 +148,7 @@ import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Dp
+import androidx.compose.ui.unit.Velocity
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.zIndex
@@ -341,18 +347,14 @@ fun PlayerScreen(
     }
 
     if (uiState.showQueue) {
-        // Swiping down in the track lists kept dismissing the sheet - gestures are
-        // fully disabled (no drag handle, no springy drag); the X button (and
-        // tapping a track) closes it.
-        val sheetState = rememberModalBottomSheetState(
-            skipPartiallyExpanded = true,
-            confirmValueChange = { it != SheetValue.Hidden },
-        )
+        // Gestures stay enabled so the M3 drag handle (lip) can drag the sheet down to
+        // dismiss it; QueueSheet's content is gesture-shielded so the track lists can
+        // never drag or dismiss the sheet themselves (the original reason gestures were
+        // disabled entirely). The X button and tapping the lip also close it.
+        val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
         ModalBottomSheet(
             onDismissRequest = viewModel::toggleQueue,
             sheetState = sheetState,
-            sheetGesturesEnabled = false,
-            dragHandle = null,
         ) {
             QueueSheet(
                 queue = uiState.displayPlaylist,
@@ -1105,6 +1107,7 @@ private fun ReactionsSheet(
     }
 }
 
+@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 private fun QueueSheet(
     queue: List<MediaMessageEntity>,
@@ -1125,37 +1128,73 @@ private fun QueueSheet(
     onClose: () -> Unit,
 ) {
     var tab by remember { mutableStateOf(0) }
-    Row(verticalAlignment = Alignment.CenterVertically) {
-        TabRow(selectedTabIndex = tab, modifier = Modifier.weight(1f)) {
-            Tab(selected = tab == 0, onClick = { tab = 0 }, text = { Text("Queue") })
-            Tab(selected = tab == 1, onClick = { tab = 1 }, text = { Text("Library") })
-        }
-        IconButton(onClick = onClose) {
-            Icon(Icons.Default.Close, contentDescription = "Close")
+    // Gesture shield: ModalBottomSheet's drag handling sits on the whole sheet Surface,
+    // so without this, drags anywhere in the content (e.g. pulling the track list down
+    // at its top) would drag or dismiss the sheet. The no-op draggable consumes leftover
+    // drag deltas in the content; the nestedScroll connection eats downward post-scroll
+    // leftovers before the sheet's own connection sees them. Only the drag handle (lip)
+    // above the content can drag the sheet. List scrolling is untouched.
+    val sheetDragShield = remember {
+        object : NestedScrollConnection {
+            // Post-scroll runs after the LazyColumn has taken what it can: swallow only
+            // the downward leftovers (i.e. list already at its top) plus downward fling
+            // velocity, so the sheet's own connection never sees them. Mid-list scrolls
+            // leave nothing behind, and upward deltas pass through untouched.
+            override fun onPostScroll(consumed: Offset, available: Offset, source: NestedScrollSource): Offset = if (available.y > 0f) available else Offset.Zero
+
+            override suspend fun onPostFling(consumed: Velocity, available: Velocity): Velocity = if (available.y > 0f) available else Velocity.Zero
         }
     }
-    if (tab == 0) {
-        QueueTab(
-            queue = queue,
-            currentIndex = currentIndex,
-            isOffline = isOffline,
-            filtersActive = appliedFilters.isActive,
-            playOrder = playOrder,
-            onCycleOrder = onCycleOrder,
-            onPlayAt = onPlayAt,
-            onQueueRemove = onQueueRemove,
-            onQueuePlayNext = onQueuePlayNext,
-            onQueueMove = onQueueMove,
-        )
-    } else {
-        LibraryTab(
-            library = library,
-            appliedFilters = appliedFilters,
-            onApply = onApply,
-            onPlayNow = onLibPlayNow,
-            onPlayNext = onLibPlayNext,
-            onAddToQueue = onLibAddToQueue,
-        )
+    Column(
+        modifier = Modifier
+            .fillMaxSize()
+            .draggable(state = rememberDraggableState {}, orientation = Orientation.Vertical)
+            .nestedScroll(sheetDragShield),
+    ) {
+        // PrimaryTabRow gives the modern M3 look (short pill indicator on the active
+        // tab). Transparent container keeps it on the sheet surface (no floating
+        // slab); the divider is drawn full-width under the whole header so it
+        // doesn't stop short of the close button.
+        Column {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                PrimaryTabRow(
+                    selectedTabIndex = tab,
+                    modifier = Modifier.weight(1f),
+                    containerColor = Color.Transparent,
+                    divider = {},
+                ) {
+                    Tab(selected = tab == 0, onClick = { tab = 0 }, text = { Text("Queue") })
+                    Tab(selected = tab == 1, onClick = { tab = 1 }, text = { Text("Library") })
+                }
+                IconButton(onClick = onClose) {
+                    Icon(Icons.Default.Close, contentDescription = "Close")
+                }
+            }
+            HorizontalDivider()
+        }
+        if (tab == 0) {
+            QueueTab(
+                queue = queue,
+                currentIndex = currentIndex,
+                isOffline = isOffline,
+                filtersActive = appliedFilters.isActive,
+                playOrder = playOrder,
+                onCycleOrder = onCycleOrder,
+                onPlayAt = onPlayAt,
+                onQueueRemove = onQueueRemove,
+                onQueuePlayNext = onQueuePlayNext,
+                onQueueMove = onQueueMove,
+            )
+        } else {
+            LibraryTab(
+                library = library,
+                appliedFilters = appliedFilters,
+                onApply = onApply,
+                onPlayNow = onLibPlayNow,
+                onPlayNext = onLibPlayNext,
+                onAddToQueue = onLibAddToQueue,
+            )
+        }
     }
 }
 
@@ -1211,6 +1250,7 @@ private fun QueueTab(
         Text(
             text = "$pos / ${queue.size} · ${gbString(queue)}$suffix",
             style = MaterialTheme.typography.titleSmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
             modifier = Modifier.weight(1f),
         )
         IconButton(onClick = onCycleOrder) {
@@ -1350,6 +1390,7 @@ private fun LibraryTab(
         Text(
             text = "${library.size} tracks · ${gbString(library)}",
             style = MaterialTheme.typography.titleSmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
             modifier = Modifier.weight(1f),
         )
     }
