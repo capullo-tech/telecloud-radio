@@ -1,3 +1,5 @@
+import com.android.build.api.artifact.SingleArtifact
+
 plugins {
     alias(libs.plugins.android.application)
     // No kotlin.android: AGP 9.0+ ships built-in Kotlin (see RadioCapullo).
@@ -74,6 +76,27 @@ android {
             // Required for TDLib .so files placed in app/src/main/jniLibs/<abi>/
             useLegacyPackaging = true
         }
+    }
+
+}
+
+// Self-identifying APK copies: telecloud-radio-v<versionName>-vc<versionCode>-<variant>.apk under
+// build/outputs/apk-named/<variant>/, produced automatically after each assemble. Uses only the
+// public artifacts API (SingleArtifact.APK) - no internal AGP classes - so it survives AGP upgrades.
+// The standard app-<variant>.apk stays in place for installDebug and friends.
+androidComponents {
+    onVariants { variant ->
+        val vn = android.defaultConfig.versionName
+        val vc = android.defaultConfig.versionCode
+        val cap = variant.name.replaceFirstChar { it.uppercase() }
+        val copyNamedApk = tasks.register<Copy>("copyNamedApk$cap") {
+            from(variant.artifacts.get(SingleArtifact.APK)) {
+                include("*.apk")
+                rename { "telecloud-radio-v$vn-vc$vc-${variant.name}.apk" }
+            }
+            into(layout.buildDirectory.dir("outputs/apk-named/${variant.name}"))
+        }
+        afterEvaluate { tasks.named("assemble$cap").configure { finalizedBy(copyNamedApk) } }
     }
 }
 

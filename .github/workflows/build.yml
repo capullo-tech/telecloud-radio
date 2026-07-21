@@ -49,4 +49,4 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: telecloud-radio-${{ github.sha }}
-          path: '**/build/outputs/apk/release/*.apk'
+          path: '**/build/outputs/apk-named/release/*.apk'
