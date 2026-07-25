@@ -48,6 +48,7 @@ class CredentialsRepository @Inject constructor(
     // hasCredentials()==true, TDLib auto-runs SetTdlibParameters with the stale bad api_id and jumps
     // straight to WaitPhone, stranding the user on the phone screen instead of the credentials form
     // (an API_ID_INVALID loop that survives app-kill and cache-clear). commit() flushes before exit.
+    // The caller invokes this on Dispatchers.IO so the synchronous write never blocks the main thread.
     fun clear() {
         prefs.edit()
             .remove("telegram_api_id")
