@@ -10,6 +10,7 @@ import androidx.annotation.OptIn
 import androidx.media3.common.AudioAttributes
 import androidx.media3.common.C
 import androidx.media3.common.ForwardingPlayer
+import androidx.media3.common.MediaMetadata
 import androidx.media3.common.Player
 import androidx.media3.common.audio.ChannelMixingAudioProcessor
 import androidx.media3.common.audio.ChannelMixingMatrix
@@ -36,6 +37,7 @@ import tech.capullo.audio.contracts.NowPlaying
 import tech.capullo.audio.contracts.PlaybackController
 import tech.capullo.audio.player.BalanceAudioProcessor
 import tech.capullo.audio.player.FifoAudioBufferSink
+import tech.capullo.audio.snapcast.firstArtist
 import tech.capullo.telecloudradio.MainActivity
 import tech.capullo.telecloudradio.data.SettingsRepository
 import tech.capullo.telecloudradio.data.playlist.ActiveTrackRepository
@@ -68,6 +70,13 @@ class PlaybackService : MediaSessionService() {
     private var fifoSink: FifoAudioBufferSink? = null
     private val serviceScope = CoroutineScope(SupervisorJob() + Dispatchers.Main)
     private val mainHandler = Handler(Looper.getMainLooper())
+
+    // The local playback player (ExoPlayer, wrapped by forwardingPlayer) and the listen-in stand-in
+    // player. Held as fields so the isListening collector can swap the MediaSession between them and
+    // onDestroy can release both. See the listen-in swap in onCreate for why the stand-in exists.
+    private var localPlayer: ExoPlayer? = null
+    private var forwardingPlayer: Player? = null
+    private var remoteListenPlayer: RemoteListenPlayer? = null
 
     // Mirror for the snapcontrol plugin, which queries from an IO thread while
     // ExoPlayer only allows access from its application thread.
@@ -244,6 +253,7 @@ class PlaybackService : MediaSessionService() {
             // other rooms/web players keep listening.
             .setHandleAudioBecomingNoisy(false)
             .build()
+        localPlayer = player
         // Local audio comes from the snapclient; the tee sits pre-volume so the
         // FIFO always receives full-scale PCM.
         player.volume = 0f
@@ -302,6 +312,12 @@ class PlaybackService : MediaSessionService() {
             }
         }
 
+        this.forwardingPlayer = forwardingPlayer
+
+        // Read-only stand-in player for listen-in mode - holds the foreground service; transport is
+        // driven by the listen screen (SnapcastManager.sendStreamControl), not through this player.
+        remoteListenPlayer = RemoteListenPlayer(Looper.getMainLooper())
+
         val sessionActivity = PendingIntent.getActivity(
             this,
             0,
@@ -320,13 +336,48 @@ class PlaybackService : MediaSessionService() {
             }
         }
 
-        // Listen-in takes over the audio output: pause our own playback (the
-        // manager already tore the broadcast stack down before connecting).
+        // Listen-in takes over the audio output. The manager already tore the broadcast stack down
+        // before connecting; pause our local player and hand the MediaSession the remote stand-in
+        // player. That keeps the session *playing* (backed by the snapclient), so PlaybackService
+        // stays a foreground mediaPlayback service - without which Android 15 / One UI "audio
+        // hardening" mutes the snapclient's audio seconds after the app is backgrounded. Swap the
+        // local player back in when the listen-in session ends.
         serviceScope.launch {
             snapcastManager.state.map { it.isListening }.distinctUntilChanged().collect { listening ->
-                if (listening) mediaSession?.player?.pause()
+                val session = mediaSession ?: return@collect
+                if (listening) {
+                    forwardingPlayer?.let { if (it.isCommandAvailable(Player.COMMAND_PLAY_PAUSE)) it.pause() }
+                    remoteListenPlayer?.let { if (session.player !== it) session.setPlayer(it) }
+                } else {
+                    forwardingPlayer?.let { if (session.player !== it) session.setPlayer(it) }
+                }
             }
         }
+        // Feed the remote now-playing into the stand-in player so the notification / lock screen show
+        // the track being listened to.
+        serviceScope.launch {
+            snapcastManager.state.collect { s ->
+                if (!s.isListening) return@collect
+                remoteListenPlayer?.updateMetadata(buildRemoteMetadata(s))
+            }
+        }
+    }
+
+    // Maps the remote Snapcast stream's metadata + decoded art onto a MediaMetadata for the
+    // listen-in notification. Mirrors PlayerScreen's remote now-playing mapping (title falls back to
+    // station, then host).
+    private fun buildRemoteMetadata(s: SnapcastManager.SnapcastState): MediaMetadata {
+        val meta = s.remoteProps?.metadata
+        val title = meta?.title?.takeIf { it.isNotBlank() }
+            ?: meta?.station?.takeIf { it.isNotBlank() }
+            ?: s.listenHost
+        return MediaMetadata.Builder()
+            .setTitle(title)
+            .setArtist(meta?.firstArtist().orEmpty())
+            .apply {
+                s.remoteArt?.let { setArtworkData(it, MediaMetadata.PICTURE_TYPE_FRONT_COVER) }
+            }
+            .build()
     }
 
     override fun onGetSession(controllerInfo: MediaSession.ControllerInfo) = mediaSession
@@ -341,11 +392,15 @@ class PlaybackService : MediaSessionService() {
         snapcastManager.disconnectListen()
         fifoSink?.close()
         fifoSink = null
-        mediaSession?.run {
-            player.release()
-            release()
-        }
+        mediaSession?.release()
         mediaSession = null
+        // Release both players explicitly: the session only holds whichever is currently swapped in,
+        // so releasing session.player alone would leak the other.
+        localPlayer?.release()
+        localPlayer = null
+        remoteListenPlayer?.release()
+        remoteListenPlayer = null
+        forwardingPlayer = null
         super.onDestroy()
     }
 }
