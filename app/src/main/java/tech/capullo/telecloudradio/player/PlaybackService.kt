@@ -5,11 +5,14 @@ import android.content.Context
 import android.content.Intent
 import android.os.Handler
 import android.os.Looper
+import android.os.SystemClock
 import android.util.Base64
+import android.util.Log
 import androidx.annotation.OptIn
 import androidx.media3.common.AudioAttributes
 import androidx.media3.common.C
 import androidx.media3.common.ForwardingPlayer
+import androidx.media3.common.MediaItem
 import androidx.media3.common.MediaMetadata
 import androidx.media3.common.Player
 import androidx.media3.common.audio.ChannelMixingAudioProcessor
@@ -28,10 +31,12 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.map
+import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import tech.capullo.audio.contracts.NowPlaying
 import tech.capullo.audio.contracts.PlaybackController
@@ -81,6 +86,13 @@ class PlaybackService : MediaSessionService() {
     // Mirror for the snapcontrol plugin, which queries from an IO thread while
     // ExoPlayer only allows access from its application thread.
     @Volatile private var playerIsPlaying = false
+
+    // Silence-watchdog state (all touched on the main thread): SilenceWatchdogSink records the last
+    // time audible PCM flowed; these track when the current item started and whether we've already
+    // skipped it for producing no audible output. See onCreate's watchdog loop.
+    private var silenceSink: SilenceWatchdogSink? = null
+    private var trackStartedElapsedMs = 0L
+    private var silenceSkipFiredForItem = false
 
     // --- Snapcast control-plugin adapter (capullo-audio SnapcontrolPlugin) ---
     // The engine's SnapcontrolPlugin is contract-driven: a StateFlow<NowPlaying> (read) + a
@@ -146,6 +158,20 @@ class PlaybackService : MediaSessionService() {
         if (Looper.myLooper() == Looper.getMainLooper()) block() else mainHandler.post(block)
     }
 
+    // Invoked (on the audio processing thread) by [SilenceWatchdogSink] when the current track has
+    // decoded to sustained digital silence - a track that "plays" (timer advancing) but is inaudible,
+    // typically a corrupt file the decoder can't parse yet doesn't error on. Warn the user and skip to
+    // the next track. tryEmit is thread-safe; NEXT is handled by PlayerViewModel, the playlist owner.
+    private fun onUndecodableSilence() {
+        val playback = activeTrackRepository.activePlayback.value
+        val name = playback?.let { it.track.title ?: it.track.fileName }
+        Log.w(TAG, "Track decoded to silence; skipping as undecodable: $name")
+        activeTrackRepository.emitMessage(
+            "Can't play “${name ?: "this track"}” - file appears corrupt. Skipping.",
+        )
+        activeTrackRepository.emitCommand(PlaybackCommand.NEXT)
+    }
+
     /**
      * A matrix that collapses [inputChannelCount] channels to stereo. 5.1 (6ch) uses the standard
      * ITU-R BS.775 coefficients (FL FR FC LFE BL BR order); other counts route ch0->L, ch1->R and
@@ -187,10 +213,23 @@ class PlaybackService : MediaSessionService() {
             it.open()
         }
 
-        // Sink chain: [mix → 2ch] → [resample → 48000] → [balance] → [tee → FIFO].
-        // Balance sits before the tee so every listener (local snapclient, LAN
+        // Taps the post-decode PCM to record when audible audio last flowed; the watchdog loop below
+        // uses it to catch a track that "plays" (clock advancing) but is inaudible - decoding to pure
+        // silence, or (corrupt FLAC-in-MP4 the decoder drops entirely) producing no PCM at all. Its
+        // own tee sits alongside the FIFO tee.
+        val silenceSink = SilenceWatchdogSink().also { this.silenceSink = it }
+
+        // Sink chain: [mix → 2ch] → [resample → 48000] → [balance] → [tee → silence watchdog] →
+        // [tee → FIFO]. Balance sits before the tees so every listener (local snapclient, LAN
         // clients, web players) hears the same adjusted stereo image.
         val renderersFactory = object : DefaultRenderersFactory(this) {
+            // Prefer platform decoders, but fall back to the bundled Media3 FFmpeg extension (on the
+            // classpath via capullo-audio) for formats the platform can't handle - widens codec
+            // coverage and lets genuinely undecodable input surface as a decoder error.
+            init {
+                setExtensionRendererMode(DefaultRenderersFactory.EXTENSION_RENDERER_MODE_ON)
+            }
+
             override fun buildAudioSink(
                 context: Context,
                 enableFloatOutput: Boolean,
@@ -217,6 +256,7 @@ class PlaybackService : MediaSessionService() {
                             mixer,
                             resampler,
                             balanceProcessor,
+                            TeeAudioProcessor(silenceSink),
                             TeeAudioProcessor(sink),
                         ),
                     )
@@ -259,6 +299,12 @@ class PlaybackService : MediaSessionService() {
         player.volume = 0f
 
         player.addListener(object : Player.Listener {
+            override fun onMediaItemTransition(mediaItem: MediaItem?, reason: Int) {
+                // Fresh track → restart the silence grace window and clear the per-item skip guard.
+                trackStartedElapsedMs = SystemClock.elapsedRealtime()
+                silenceSkipFiredForItem = false
+            }
+
             override fun onIsPlayingChanged(isPlaying: Boolean) {
                 playerIsPlaying = isPlaying
                 if (isPlaying) {
@@ -361,6 +407,25 @@ class PlaybackService : MediaSessionService() {
                 remoteListenPlayer?.updateMetadata(buildRemoteMetadata(s))
             }
         }
+
+        // Silence watchdog: a track that reports playing but never delivers audible PCM would
+        // otherwise broadcast dead silence with an advancing clock - a corrupt file the decoder drops
+        // entirely (no PCM at all) or one that decodes to pure zeros. If, while the local player is
+        // playing, no audible audio has reached the sink for SILENT_SKIP_MS since the track started,
+        // skip it and warn. Listen-in pauses the local player, so isPlaying is false and this stays
+        // quiet then. Runs on Main (serviceScope), the same thread that owns the ExoPlayer.
+        serviceScope.launch {
+            while (isActive) {
+                delay(WATCHDOG_TICK_MS)
+                val p = localPlayer ?: continue
+                if (silenceSkipFiredForItem || !p.isPlaying) continue
+                val audibleRef = maxOf(silenceSink?.lastAudibleElapsedMs ?: 0L, trackStartedElapsedMs)
+                if (audibleRef > 0L && SystemClock.elapsedRealtime() - audibleRef > SILENT_SKIP_MS) {
+                    silenceSkipFiredForItem = true
+                    onUndecodableSilence()
+                }
+            }
+        }
     }
 
     // Maps the remote Snapcast stream's metadata + decoded art onto a MediaMetadata for the
@@ -402,5 +467,15 @@ class PlaybackService : MediaSessionService() {
         remoteListenPlayer = null
         forwardingPlayer = null
         super.onDestroy()
+    }
+
+    private companion object {
+        const val TAG = "PlaybackService"
+
+        // Silence watchdog: how often it polls, and how long a playing track may go without any
+        // audible PCM before it's judged undecodable and skipped. 8s comfortably clears normal
+        // buffering / short silent intros while still cutting a dead track quickly.
+        const val WATCHDOG_TICK_MS = 1000L
+        const val SILENT_SKIP_MS = 8000L
     }
 }
