@@ -41,11 +41,19 @@ class CredentialsRepository @Inject constructor(
     // Clears the saved API ID/Hash so the next launch starts back at the credentials form. Keeps
     // DB_KEY_PREF (the local-DB encryption key) - it is not user-supplied and re-generating it would
     // needlessly orphan the encrypted TDLib database. Used by the api-invalid recovery path.
+    //
+    // commit() (synchronous), not apply(): the sole caller (AuthViewModel.resetCredentials) kills the
+    // process with Runtime.exit(0) immediately after this returns. apply()'s disk write is async, so
+    // the kill races it and usually wins - leaving the old creds on disk. Next launch then still sees
+    // hasCredentials()==true, TDLib auto-runs SetTdlibParameters with the stale bad api_id and jumps
+    // straight to WaitPhone, stranding the user on the phone screen instead of the credentials form
+    // (an API_ID_INVALID loop that survives app-kill and cache-clear). commit() flushes before exit.
+    // The caller invokes this on Dispatchers.IO so the synchronous write never blocks the main thread.
     fun clear() {
         prefs.edit()
             .remove("telegram_api_id")
             .remove("telegram_api_hash")
-            .apply()
+            .commit()
     }
 
     companion object {
