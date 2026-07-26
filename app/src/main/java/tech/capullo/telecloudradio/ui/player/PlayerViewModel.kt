@@ -168,6 +168,11 @@ class PlayerViewModel @Inject constructor(
             }
         }
         viewModelScope.launch {
+            // Notices raised from PlaybackService (e.g. the silence watchdog skipping a corrupt
+            // track) surface on the player screen's snackbar.
+            activeTrackRepository.messages.collect { _downloadToast.tryEmit(it) }
+        }
+        viewModelScope.launch {
             connectivityMonitor.isOnline.drop(1).collect { online ->
                 if (chatId != 0L) reloadPlaylist(online)
             }
