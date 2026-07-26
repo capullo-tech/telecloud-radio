@@ -6,9 +6,11 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import dagger.hilt.android.lifecycle.HiltViewModel
 import dagger.hilt.android.qualifiers.ApplicationContext
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import tech.capullo.telecloudradio.data.credentials.CredentialsRepository
 import tech.capullo.telecloudradio.data.telegram.TelegramRepository
 import javax.inject.Inject
@@ -93,12 +95,18 @@ class AuthViewModel @Inject constructor(
     // process once past it, and TelegramClient exposes no logout. No DB wipe: api_id is a per-launch
     // SetTdlibParameters argument (not baked into the local DB) and no session ever completed.
     fun resetCredentials() {
-        credentials.clear()
-        context.packageManager
-            .getLaunchIntentForPackage(context.packageName)
-            ?.apply { addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TASK) }
-            ?.let { context.startActivity(it) }
-        Runtime.getRuntime().exit(0)
+        // clear() uses SharedPreferences.commit() (synchronous) so the wipe is durably on disk before
+        // the exit(0) below - an async apply() would race the process kill and usually lose. commit()
+        // is disk I/O, so run it off the main thread; the relaunch + exit stay sequenced after it, so
+        // durability still holds while the UI thread is never blocked.
+        viewModelScope.launch {
+            withContext(Dispatchers.IO) { credentials.clear() }
+            context.packageManager
+                .getLaunchIntentForPackage(context.packageName)
+                ?.apply { addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TASK) }
+                ?.let { context.startActivity(it) }
+            Runtime.getRuntime().exit(0)
+        }
     }
 
     fun clearError() {
