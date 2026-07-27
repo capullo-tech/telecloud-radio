@@ -1,0 +1,88 @@
+section                          count  total_ms  mean_ms   max_ms
+doSomeWork                        2419    8972.6     3.71     15.5
+drainAndFeed                      2419    7906.0     3.27     15.1
+Choreographer#doFrame              434    6625.8    15.27    403.1
+DrawFrame                          363    4245.5    11.70     29.8
+traversal                          339    3769.4    11.12    299.2
+draw                               374    3256.7     8.71    141.4
+animation                          360    2410.6     6.70    187.4
+Record View#draw()                 374    1676.2     4.48    140.2
+AndroidOwner:measureAndLayout      298    1432.9     4.81    115.8
+Compose:recompose                  248    1106.4     4.46    127.1
+Recomposer:recompose               286    1089.3     3.81    182.9
+flush commands                     388     916.0     2.36     10.5
+AndroidOwner:onTouch               122     430.4     3.53     27.0
+Recomposer:animation               205     408.1     1.99     25.9
+input                              321     374.3     1.17      9.5
+dispatchFrameCallbacks              42     327.5     7.80     29.9
+prepareAndDraw                      28     323.3    11.55     29.8
+Compose:applyChanges               188     303.4     1.61     34.5
+syncFrameState                     363     212.9     0.59      2.6
+TextStringSimpleNode::measure      217     206.5     0.95      4.1
+prepareTree                        391     167.9     0.43      1.8
+measure                             15     141.7     9.45    121.0
+TextLayout:initLayout              295     123.4     0.42      1.8
+AndroidOwner:onMeasure               6     122.9    20.48    119.7
+compose:lazy:prefetch:compose       15      97.2     6.48     16.1
+compose:lazy:prefetch:execute:urgent    26      79.0     3.04     18.2
+Bitmap#prepareToDraw 63x63          45      52.5     1.17      3.6
+Compose:onRemembered                59      50.7     0.86     25.1
+Compose:onForgotten                 61      48.8     0.80     15.3
+layout                              11      48.6     4.41     34.4
+AndroidOwner:outOfFrameExecutor     28      48.2     1.72      8.9
+compose:lazy:prefetch:idle_frame    11      45.9     4.17     25.4
+Compose:deactivate                  39      43.4     1.11      2.6
+compose:lazy:prefetch:measure        6      27.8     4.64      5.6
+Sheet.dateOptions                    1      26.3    26.34     26.3
+PausedComposition:applyChanges       9      26.0     2.88      3.8
+Filters.monthKey                    28      24.8     0.88      6.0
+compose:lazy:prefetch:apply          7      21.1     3.01      3.5
+VM.positionTick                     48      19.9     0.41      3.7
+FocusTransactions:requestFocus       1      19.0    19.03     19.0
+VM.publishQueue                      1      12.2    12.22     12.2
+Compose:sideeffects                 80       9.3     0.12      1.6
+Sheet.uploaderOptions                1       7.3     7.35      7.3
+inflate                              1       6.9     6.87      6.9
+FocusOwnerImpl:dispatchKeyEvent      6       6.8     1.13      2.8
+Filters.uploaderKey                 28       6.3     0.23      1.5
+Compose:recordChanges               15       5.0     0.33      0.6
+frameComplete 1                      2       4.9     2.45      3.8
+drainDisplayEventQueue              73       4.8     0.07      0.2
+Sheet.gbString                       8       3.5     0.44      0.6
+notifyFramePending                 364       3.5     0.01      0.2
+VM.refreshNextTrack                  3       3.3     1.10      1.8
+FrameLayout                          2       3.2     1.59      2.2
+VM.saveQueueState                    1       2.6     2.62      2.6
+Sheet.libraryFilter                  4       2.4     0.61      1.0
+setSurface                           1       2.3     2.33      2.3
+flush layers                         2       2.3     1.16      1.3
+Sheet.queueSearch                    2       2.1     1.04      1.2
+broadcastReceiveReg : com.android.server.net.NetworkPolicyManagerService$11@15e1049, for com.android.server.action.NETWORK_STATS_UPDATED     1       1.7     1.71      1.7
+Filters.matches                    112       1.5     0.01      0.1
+Compose:Composer.dispose            13       1.4     0.11      0.3
+queue mFrameCallbackTask            42       1.3     0.03      0.1
+Compose:unobserve                   32       1.3     0.04      0.2
+Bitmap#prepareToDraw 47x47           1       1.2     1.23      1.2
+res/drawable-xxhdpi-v4/textinput_qwerty_candidate_btn_down.bmp     1       1.1     1.06      1.1
+Sheet.librarySort                    4       1.1     0.27      0.5
+VM.prefetchAhead                     1       0.7     0.72      0.7
+Sheet.extOptions                     1       0.6     0.63      0.6
+compose:lazy:prefetch:resolve-nested     6       0.6     0.10      0.1
+ViewStub                             1       0.6     0.56      0.6
+drawLayer [ViewLayer] 126.0 x 126.0     2       0.5     0.27      0.3
+VM.totalSizeGb                       1       0.5     0.48      0.5
+AssetManager::OpenXmlAsset(res/interpolator/linear_out_slow_in.xml)     1       0.4     0.41      0.4
+alpha caused saveLayer 126x126      33       0.4     0.01      0.0
+AssetManager::OpenXmlAsset(res/layout/screen_simple_overlay_action_mode.xml)     1       0.4     0.39      0.4
+AssetManager::OpenXmlAsset(res/interpolator/fast_out_linear_in.xml)     1       0.4     0.39      0.4
+broadcastReceiveReg : com.android.internal.telephony.BigDataInfoController$1@331dec1, for android.intent.action.BATTERY_CHANGED     1       0.4     0.39      0.4
+broadcastReceiveReg : com.android.internal.telephony.BigDataInfoController$1@161cb6f, for android.intent.action.BATTERY_CHANGED     1       0.3     0.27      0.3
+AssetManager::OpenXmlAsset(res/transition/fade.xml)     1       0.3     0.27      0.3
+AssetManager::OpenXmlAsset(res/transition/move.xml)     1       0.2     0.17      0.2
+broadcastReceiveReg : com.android.server.power.PowerManagerService$BatteryReceiver@8d33e16, for android.intent.action.BATTERY_CHANGED     1       0.2     0.16      0.2
+AssetManager::OpenNonAsset(res/drawable-xxhdpi-v4/textinput_qwerty_candidate_btn_down.bmp)     1       0.1     0.11      0.1
+Theme::ApplyStyle                    2       0.1     0.05      0.1
+UnhandledKeyEvent dispatch           3       0.1     0.02      0.0
+broadcastReceiveReg : com.android.server.connectivity.Tethering$StateReceiver@eded6e8, for android.intent.action.BATTERY_CHANGED     1       0.0     0.04      0.0
+ResourcesManager#applyConfigurationToResourcesLocked     1       0.0     0.02      0.0
+AssetManager::GetBag                 2       0.0     0.01      0.0

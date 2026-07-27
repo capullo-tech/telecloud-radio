@@ -156,6 +156,7 @@ import androidx.hilt.lifecycle.viewmodel.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.media3.common.Player
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import tech.capullo.audio.snapcast.SnapclientProcess
@@ -167,6 +168,7 @@ import tech.capullo.telecloudradio.data.db.MediaMessageEntity
 import tech.capullo.telecloudradio.player.AudioMetadata
 import tech.capullo.telecloudradio.snapcast.SnapcastManager
 import tech.capullo.telecloudradio.ui.snapcast.SnapcastViewModel
+import tech.capullo.telecloudradio.util.PerfTrace
 import java.io.File
 import java.nio.ByteBuffer
 import java.nio.ByteOrder
@@ -277,21 +279,7 @@ fun PlayerScreen(
                 actions = {
                     IconButton(onClick = viewModel::toggleSleepTimer) {
                         if (uiState.sleepTimerActive) {
-                            val remaining = uiState.sleepTimerSecondsRemaining
-                            val m = remaining / 60
-                            val s = remaining % 60
-                            Text(
-                                // Match QC's countdown format (m:ss, or "Ns" under a minute);
-                                // 0 remaining = countdown done, finishing the current track ("zZ").
-                                text = when {
-                                    remaining <= 0 -> "zZ"
-                                    m > 0 -> "$m:${s.toString().padStart(2, '0')}"
-                                    else -> "${s}s"
-                                },
-                                style = MaterialTheme.typography.labelSmall,
-                                fontWeight = FontWeight.Bold,
-                                color = MaterialTheme.colorScheme.primary,
-                            )
+                            SleepTimerCountdown(viewModel.sleepTimerSecondsRemaining)
                         } else {
                             Icon(
                                 Icons.Default.Snooze,
@@ -417,6 +405,27 @@ fun PlayerScreen(
     }
 }
 
+// Collected here (leaf) rather than at the PlayerScreen root so the 1 s countdown
+// doesn't recompose the whole screen.
+@Composable
+private fun SleepTimerCountdown(secondsState: StateFlow<Int>) {
+    val remaining by secondsState.collectAsStateWithLifecycle()
+    val m = remaining / 60
+    val s = remaining % 60
+    Text(
+        // Match QC's countdown format (m:ss, or "Ns" under a minute);
+        // 0 remaining = countdown done, finishing the current track ("zZ").
+        text = when {
+            remaining <= 0 -> "zZ"
+            m > 0 -> "$m:${s.toString().padStart(2, '0')}"
+            else -> "${s}s"
+        },
+        style = MaterialTheme.typography.labelSmall,
+        fontWeight = FontWeight.Bold,
+        color = MaterialTheme.colorScheme.primary,
+    )
+}
+
 @Composable
 private fun OfflineBanner() {
     Surface(color = MaterialTheme.colorScheme.secondaryContainer) {
@@ -490,7 +499,7 @@ private fun PortraitPlayer(
             verticalArrangement = Arrangement.spacedBy(14.dp),
             modifier = Modifier.padding(horizontal = 28.dp),
         ) {
-            SeekBar(state = state, onSeek = viewModel::seekTo)
+            SeekBar(state = state, positionState = viewModel.positionState, onSeek = viewModel::seekTo)
             ControlBar(state = state, viewModel = viewModel)
             // Secondary row: Multiroom (under the order button) · Playlist (under repeat)
             Row(
@@ -711,18 +720,21 @@ private fun ListenInPlayer(
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-private fun SeekBar(state: PlayerUiState, onSeek: (Long) -> Unit) {
+private fun SeekBar(state: PlayerUiState, positionState: StateFlow<Long>, onSeek: (Long) -> Unit) {
     val durationMs = when {
         state.trackDuration > 0L -> state.trackDuration
         (state.track?.duration ?: 0) > 0 -> state.track!!.duration!! * 1000L
         else -> 0L
     }
+    // Collected here (leaf) rather than at the screen root so the 500 ms ticker only
+    // recomposes the seek bar.
+    val position by positionState.collectAsStateWithLifecycle()
     // Track the drag locally so the thumb doesn't fight the 500ms position ticker
     var dragValue by remember { mutableStateOf<Float?>(null) }
-    val shownMs = (dragValue ?: state.currentPosition.coerceIn(0L, durationMs).toFloat()).toLong()
+    val shownMs = (dragValue ?: position.coerceIn(0L, durationMs).toFloat()).toLong()
     Column(modifier = Modifier.fillMaxWidth()) {
         Slider(
-            value = dragValue ?: state.currentPosition.coerceIn(0L, durationMs).toFloat(),
+            value = dragValue ?: position.coerceIn(0L, durationMs).toFloat(),
             onValueChange = { dragValue = it },
             onValueChangeFinished = {
                 dragValue?.let { onSeek(it.toLong()) }
@@ -817,34 +829,20 @@ private fun ControlBar(state: PlayerUiState, viewModel: PlayerViewModel) {
             // Ring only when the track must fully download before it can play (Telegram has no
             // streaming) - determinate, so it fills and lands on full. Cached skips prepare almost
             // instantly and show no ring, so the button no longer flashes a meaningless spinner.
-            val downloadProgress = state.downloadProgress
-            if (downloadProgress != null) {
-                CircularProgressIndicator(
-                    progress = { downloadProgress },
-                    modifier = Modifier.size(76.dp),
-                    strokeWidth = 2.dp,
-                )
-            }
+            ActiveDownloadRing(viewModel.activeDownloadProgress)
         }
         IconButton(
             onClick = viewModel::nextTrack,
             enabled = !state.isLoading && state.nextTrackReady,
             modifier = Modifier.size(56.dp),
         ) {
-            val progress = state.nextDownloadProgress
             // Only surface the next-track download once the current track is actually playing -
             // otherwise the Next button flickers between icon and ring during the initial load/
             // prefetch churn (the "loading for next song" jumpiness).
-            if (state.isPlaying && !state.nextTrackReady && progress != null) {
-                // Next track still downloading - show its progress instead of the icon
-                CircularProgressIndicator(
-                    progress = { progress },
-                    modifier = Modifier.size(32.dp),
-                    strokeWidth = 3.dp,
-                )
-            } else {
-                Icon(Icons.Default.SkipNext, contentDescription = "Next", modifier = Modifier.size(40.dp))
-            }
+            NextDownloadContent(
+                progressState = viewModel.nextDownloadProgress,
+                showProgress = state.isPlaying && !state.nextTrackReady,
+            )
         }
         IconButton(onClick = viewModel::cycleRepeatMode) {
             Icon(
@@ -862,6 +860,37 @@ private fun ControlBar(state: PlayerUiState, viewModel: PlayerViewModel) {
                 },
             )
         }
+    }
+}
+
+// Collected here (leaf) so TDLib progress ticks only recompose the ring, not the control bar.
+@Composable
+private fun ActiveDownloadRing(progressState: StateFlow<Float?>) {
+    val progress by progressState.collectAsStateWithLifecycle()
+    val p = progress
+    if (p != null) {
+        CircularProgressIndicator(
+            progress = { p },
+            modifier = Modifier.size(76.dp),
+            strokeWidth = 2.dp,
+        )
+    }
+}
+
+// Collected here (leaf) so TDLib progress ticks only recompose the ring, not the control bar.
+@Composable
+private fun NextDownloadContent(progressState: StateFlow<Float?>, showProgress: Boolean) {
+    val progress by progressState.collectAsStateWithLifecycle()
+    val p = progress
+    if (showProgress && p != null) {
+        // Next track still downloading - show its progress instead of the icon
+        CircularProgressIndicator(
+            progress = { p },
+            modifier = Modifier.size(32.dp),
+            strokeWidth = 3.dp,
+        )
+    } else {
+        Icon(Icons.Default.SkipNext, contentDescription = "Next", modifier = Modifier.size(40.dp))
     }
 }
 
@@ -1128,6 +1157,20 @@ private fun QueueSheet(
     onClose: () -> Unit,
 ) {
     var tab by remember { mutableStateOf(0) }
+    // Library filter options derived at sheet scope (not inside LibraryTab) so they survive
+    // Queue↔Library tab switches - LibraryTab leaves composition on switch and would recompute
+    // all three on every visit.
+    val uploaderOptions = remember(library) {
+        PerfTrace.section("Sheet.uploaderOptions") { library.mapNotNull(::uploaderKey).distinct() }
+    }
+    val dateOptions = remember(library) {
+        PerfTrace.section("Sheet.dateOptions") {
+            datePresets + library.mapNotNull { monthKey(it.date) }.distinct()
+        }
+    }
+    val extOptions = remember(library) {
+        PerfTrace.section("Sheet.extOptions") { library.mapNotNull(::extensionKey).distinct().sorted() }
+    }
     // Gesture shield: ModalBottomSheet's drag handling sits on the whole sheet Surface,
     // so without this, drags anywhere in the content (e.g. pulling the track list down
     // at its top) would drag or dismiss the sheet. The no-op draggable consumes leftover
@@ -1189,6 +1232,9 @@ private fun QueueSheet(
             LibraryTab(
                 library = library,
                 appliedFilters = appliedFilters,
+                uploaderOptions = uploaderOptions,
+                dateOptions = dateOptions,
+                extOptions = extOptions,
                 onApply = onApply,
                 onPlayNow = onLibPlayNow,
                 onPlayNext = onLibPlayNext,
@@ -1198,7 +1244,14 @@ private fun QueueSheet(
     }
 }
 
-private fun gbString(tracks: List<MediaMessageEntity>): String = "%.1f GB".format(tracks.sumOf { it.fileSize ?: 0L } / (1024.0 * 1024.0 * 1024.0))
+private fun gbString(tracks: List<MediaMessageEntity>): String = PerfTrace.section("Sheet.gbString") {
+    "%.1f GB".format(tracks.sumOf { it.fileSize ?: 0L } / (1024.0 * 1024.0 * 1024.0))
+}
+
+// A row in the queue view: the original queue index (clicks/menus address rows by it) plus a
+// LazyColumn key that stays stable across reorders/removals. The queue allows duplicate tracks,
+// so the key is messageId + occurrence index among that track's duplicates.
+private data class QueueRow(val qIdx: Int, val track: MediaMessageEntity, val key: String)
 
 @Composable
 private fun QueueTab(
@@ -1221,23 +1274,35 @@ private fun QueueTab(
     // Search narrows the *view* only; playback still follows the full queue.
     // Items carry their original queue index so clicks/menus address the right row.
     val visible = remember(queue, search) {
-        val q = search.trim().lowercase()
-        queue.withIndex().filter { (_, t) ->
-            q.isEmpty() ||
-                t.title?.lowercase()?.contains(q) == true ||
-                t.performer?.lowercase()?.contains(q) == true ||
-                t.fileName?.lowercase()?.contains(q) == true
+        PerfTrace.section("Sheet.queueSearch") {
+            val q = search.trim().lowercase()
+            val occurrences = HashMap<Long, Int>()
+            queue.withIndex().filter { (_, t) ->
+                q.isEmpty() ||
+                    t.title?.lowercase()?.contains(q) == true ||
+                    t.performer?.lowercase()?.contains(q) == true ||
+                    t.fileName?.lowercase()?.contains(q) == true
+            }.map { (qIdx, track) ->
+                val occurrence = occurrences.getOrDefault(track.messageId, 0)
+                occurrences[track.messageId] = occurrence + 1
+                QueueRow(qIdx, track, "${track.messageId}#$occurrence")
+            }
         }
     }
     val listState = rememberLazyListState()
     val showScrollToTop by remember { derivedStateOf { listState.firstVisibleItemIndex > 3 } }
     val scope = rememberCoroutineScope()
 
-    LaunchedEffect(currentIndex, queue) {
-        val visiblePos = visible.indexOfFirst { it.index == currentIndex }
-        if (visiblePos >= 0) listState.scrollToItem(visiblePos)
+    // Scroll to the playing row only when the *track* changes - keying this on `queue` yanked
+    // the list back on every queue edit (reorder/remove/sync), discarding the scroll position.
+    LaunchedEffect(currentIndex) {
+        val row = visible.firstOrNull { it.qIdx == currentIndex } ?: return@LaunchedEffect
+        val alreadyVisible = listState.layoutInfo.visibleItemsInfo.any { it.key == row.key }
+        if (!alreadyVisible) listState.scrollToItem(visible.indexOf(row))
     }
 
+    // Re-summing sizes on every recomposition (e.g. each search keystroke) showed up in traces
+    val queueGb = remember(queue) { gbString(queue) }
     Row(
         modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 8.dp),
         verticalAlignment = Alignment.CenterVertically,
@@ -1248,7 +1313,7 @@ private fun QueueTab(
             if (isOffline) append(" · offline")
         }
         Text(
-            text = "$pos / ${queue.size} · ${gbString(queue)}$suffix",
+            text = "$pos / ${queue.size} · $queueGb$suffix",
             style = MaterialTheme.typography.titleSmall,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
             modifier = Modifier.weight(1f),
@@ -1278,8 +1343,13 @@ private fun QueueTab(
             contentPadding = PaddingValues(bottom = 32.dp),
             modifier = Modifier.fillMaxSize().verticalScrollbar(listState, scrollbarColor()),
         ) {
-            itemsIndexed(visible, key = { _, iv -> iv.index }) { _, indexed ->
-                val (qIdx, track) = indexed
+            itemsIndexed(
+                visible,
+                key = { _, row -> row.key },
+                contentType = { _, _ -> "track" },
+            ) { _, row ->
+                val qIdx = row.qIdx
+                val track = row.track
                 val isDragging = draggingQueueIndex == qIdx
                 TrackRow(
                     track = track,
@@ -1351,6 +1421,9 @@ private fun QueueTab(
 private fun LibraryTab(
     library: List<MediaMessageEntity>,
     appliedFilters: QueueFilters,
+    uploaderOptions: List<String>,
+    dateOptions: List<String>,
+    extOptions: List<String>,
     onApply: (QueueFilters) -> Unit,
     onPlayNow: (MediaMessageEntity) -> Unit,
     onPlayNext: (MediaMessageEntity) -> Unit,
@@ -1359,13 +1432,9 @@ private fun LibraryTab(
     // Draft filters: chips + search preview the library live; Apply rebuilds the queue
     var draft by remember(appliedFilters) { mutableStateOf(appliedFilters) }
 
-    val uploaderOptions = remember(library) { library.mapNotNull(::uploaderKey).distinct() }
-    val dateOptions = remember(library) {
-        datePresets + library.mapNotNull { monthKey(it.date) }.distinct()
+    val filtered = remember(library, draft) {
+        PerfTrace.section("Sheet.libraryFilter") { library.filter(draft::matches) }
     }
-    val extOptions = remember(library) { library.mapNotNull(::extensionKey).distinct().sorted() }
-
-    val filtered = remember(library, draft) { library.filter(draft::matches) }
     // View-only sort: not part of `draft`, so it applies immediately and never gates "Apply to
     // queue". Sort by the actual message `date` (epoch-seconds string), NOT by reversing the
     // incoming order - the library arrives ordered by messageId, and forwarded/re-posted tracks
@@ -1373,22 +1442,25 @@ private fun LibraryTab(
     // Null/non-numeric dates sink to the bottom in either direction.
     var sortNewestFirst by remember { mutableStateOf(true) }
     val displayed = remember(filtered, sortNewestFirst) {
-        if (sortNewestFirst) {
-            filtered.sortedByDescending { it.date?.toLongOrNull() ?: Long.MIN_VALUE }
-        } else {
-            filtered.sortedBy { it.date?.toLongOrNull() ?: Long.MAX_VALUE }
+        PerfTrace.section("Sheet.librarySort") {
+            if (sortNewestFirst) {
+                filtered.sortedByDescending { it.date?.toLongOrNull() ?: Long.MIN_VALUE }
+            } else {
+                filtered.sortedBy { it.date?.toLongOrNull() ?: Long.MAX_VALUE }
+            }
         }
     }
     val listState = rememberLazyListState()
     val showScrollToTop by remember { derivedStateOf { listState.firstVisibleItemIndex > 3 } }
     val scope = rememberCoroutineScope()
 
+    val libraryGb = remember(library) { gbString(library) }
     Row(
         modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 8.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
         Text(
-            text = "${library.size} tracks · ${gbString(library)}",
+            text = "${library.size} tracks · $libraryGb",
             style = MaterialTheme.typography.titleSmall,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
             modifier = Modifier.weight(1f),
@@ -1476,7 +1548,11 @@ private fun LibraryTab(
             contentPadding = PaddingValues(bottom = 32.dp),
             modifier = Modifier.fillMaxSize().verticalScrollbar(listState, scrollbarColor()),
         ) {
-            itemsIndexed(displayed) { _, track ->
+            itemsIndexed(
+                displayed,
+                key = { _, t -> t.messageId },
+                contentType = { _, _ -> "track" },
+            ) { _, track ->
                 TrackRow(
                     track = track,
                     isCurrent = false,
@@ -1957,11 +2033,17 @@ private fun spectrogramColorArgb(v: Float): Int {
     return (0xFF shl 24) or (r shl 16) or (g shl 8) or b
 }
 
+// One shared formatter: formatTelegramDate runs per visible row, and allocating a
+// SimpleDateFormat per call showed up in traces. Composition is main-thread only and both call
+// sites (TrackInfo, sheet track rows) are composables, so a plain val is safe here -
+// SimpleDateFormat is not thread-safe, so do NOT call this off the main thread.
+private val rowDateFormat = SimpleDateFormat("d MMM yyyy", Locale.getDefault())
+
 private fun formatTelegramDate(dateStr: String?): String? {
     if (dateStr.isNullOrBlank()) return null
     return try {
         val epochSeconds = dateStr.toLong()
-        SimpleDateFormat("d MMM yyyy", Locale.getDefault()).format(Date(epochSeconds * 1000))
+        rowDateFormat.format(Date(epochSeconds * 1000))
     } catch (_: Exception) {
         null
     }

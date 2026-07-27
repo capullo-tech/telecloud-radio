@@ -1,0 +1,106 @@
+section                          count  total_ms  mean_ms   max_ms
+doSomeWork                        2432    8358.0     3.44     13.7
+drainAndFeed                      2432    7315.0     3.01     13.2
+Choreographer#doFrame              492    7065.7    14.36    380.6
+DrawFrame                          375    4595.4    12.25     29.9
+traversal                          359    3898.6    10.86    285.1
+draw                               387    3304.8     8.54    126.9
+animation                          409    2703.1     6.61    161.9
+Record View#draw()                 385    1575.4     4.09    125.9
+Recomposer:recompose               325    1423.8     4.38    157.4
+AndroidOwner:measureAndLayout      304    1378.8     4.54    103.3
+Compose:recompose                  493    1295.7     2.63    113.7
+flush commands                     402     942.7     2.34      7.8
+AndroidOwner:onTouch               129     398.2     3.09     28.8
+input                              345     388.7     1.13      8.9
+Recomposer:animation               205     370.7     1.81     28.2
+dispatchFrameCallbacks              41     369.2     9.00     19.5
+prepareAndDraw                      29     366.0    12.62     19.4
+Compose:applyChanges               284     321.3     1.13     32.3
+TextStringSimpleNode::measure      232     226.3     0.98      3.5
+syncFrameState                     375     224.5     0.60      2.7
+prepareTree                        404     182.2     0.45      2.3
+measure                             18     154.4     8.58    119.7
+TextLayout:initLayout              318     134.3     0.42      1.9
+AndroidOwner:onMeasure               6     119.7    19.94    118.3
+compose:lazy:prefetch:compose       18      74.3     4.13      9.6
+compose:lazy:prefetch:execute:urgent    30      68.6     2.29     14.2
+layout                              14      64.2     4.59     23.5
+Compose:onRemembered                59      47.6     0.81     26.1
+Bitmap#prepareToDraw 63x63          45      47.3     1.05      2.0
+relayoutWindow: tech.capullo.telecloudradio     2      43.9    21.94     28.3
+AndroidOwner:outOfFrameExecutor     30      43.7     1.46      5.7
+Compose:deactivate                  38      37.7     0.99      1.9
+Compose:onForgotten                 59      35.3     0.60      8.2
+PausedComposition:applyChanges      11      31.7     2.88      4.0
+compose:lazy:prefetch:measure        4      22.3     5.59      7.0
+FocusTransactions:requestFocus       1      21.7    21.72     21.7
+VM.positionTick                     49      18.9     0.39      0.8
+Sheet.dateOptions                    1      18.4    18.37     18.4
+serviceBind                          5      17.4     3.49      9.0
+Filters.monthKey                    28      17.0     0.61      1.0
+Compose:sideeffects                126      14.8     0.12      1.9
+compose:lazy:prefetch:apply          4      13.3     3.34      4.3
+providerRemove                       2      13.0     6.48      6.8
+serviceCreate: CreateServiceData{token=android.os.BinderProxy@b9c6a2a className=com.google.android.gms.chimera.PersistentIntentOperationService packageName=com.google.android.gms intent=null}     1       8.7     8.72      8.7
+wmLayout                             2       8.2     4.09      4.9
+broadcastReceiveComp                 1       7.7     7.68      7.7
+serviceStop                          3       7.3     2.44      5.9
+Sheet.uploaderOptions                1       6.8     6.82      6.8
+VM.publishQueue                      1       6.8     6.78      6.8
+inflate                              1       6.5     6.52      6.5
+Compose:recordChanges               24       6.5     0.27      0.9
+FocusOwnerImpl:dispatchKeyEvent      6       6.2     1.04      1.9
+Filters.uploaderKey                 28       6.0     0.21      0.5
+serviceUnbind                        3       4.7     1.58      3.3
+drainDisplayEventQueue              68       4.1     0.06      0.3
+flush layers                         3       4.0     1.34      1.6
+setSurface                           1       4.0     3.97      4.0
+serviceStart: ServiceArgsData{token=android.os.BinderProxy@b9c6a2a startId=1 args=Intent { act=com.google.android.gms.gcm.ACTION_CHECK_QUEUE cat=[targeted_intent_op_prefix:.scheduler.SchedulerWakeupIntentOperation] cmp=com.google.android.gms/.chimera.PersistentIntentOperationService (has extras) }}     1       3.7     3.70      3.7
+notifyFramePending                 378       3.4     0.01      0.1
+Sheet.libraryFilter                  4       3.2     0.80      1.2
+FrameLayout                          2       3.1     1.57      2.0
+Sheet.gbString                       8       3.0     0.37      0.6
+VM.saveQueueState                    1       2.6     2.63      2.6
+VM.refreshNextTrack                  3       2.3     0.78      1.1
+res/drawable-xxhdpi-v4/textinput_qwerty_candidate_btn_down.bmp     1       2.2     2.21      2.2
+Filters.matches                    112       2.1     0.02      0.2
+compose:lazy:prefetch:idle_frame    11       2.1     0.19      0.3
+serviceCreate: CreateServiceData{token=android.os.BinderProxy@d5eefdb className=com.google.android.gms.auth.GetToken packageName=com.google.android.gms intent=null}     1       1.6     1.57      1.6
+serviceCreate: CreateServiceData{token=android.os.BinderProxy@ce2f6ce className=com.google.android.gms.tapandpay.gcmtask.TapAndPayGcmTaskService packageName=com.google.android.gms intent=null}     1       1.4     1.38      1.4
+frameComplete 1                      2       1.4     0.68      0.8
+serviceCreate: CreateServiceData{token=android.os.BinderProxy@72b100 className=com.google.android.gms.fonts.update.UpdateSchedulerService packageName=com.google.android.gms intent=null}     1       1.4     1.35      1.4
+serviceCreate: CreateServiceData{token=android.os.BinderProxy@54dd7fb className=com.google.android.gms.clearcut.uploader.QosUploaderService packageName=com.google.android.gms intent=null}     1       1.3     1.29      1.3
+Compose:unobserve                   31       1.2     0.04      0.2
+compose:lazy:prefetch:resolve-nested     4       1.1     0.27      0.6
+Sheet.queueSearch                    2       1.1     0.54      0.6
+closeSurfaceTransaction              2       1.0     0.52      0.6
+queue mFrameCallbackTask            41       0.9     0.02      0.1
+Sheet.librarySort                    4       0.9     0.22      0.4
+Bitmap#prepareToDraw 47x47           1       0.7     0.73      0.7
+Sheet.extOptions                     1       0.7     0.67      0.7
+Compose:Composer.dispose            12       0.6     0.05      0.1
+drawLayer [ViewLayer] 126.0 x 126.0     2       0.5     0.27      0.3
+VM.prefetchAhead                     1       0.5     0.49      0.5
+alpha caused saveLayer 126x126      31       0.4     0.01      0.0
+ViewStub                             1       0.4     0.43      0.4
+relayoutWindow: viewVisibility_1     2       0.4     0.20      0.3
+AssetManager::OpenXmlAsset(res/interpolator/linear_out_slow_in.xml)     1       0.4     0.37      0.4
+AssetManager::OpenNonAsset(res/drawable-xxhdpi-v4/textinput_qwerty_candidate_btn_down.bmp)     1       0.3     0.28      0.3
+AssetManager::OpenXmlAsset(res/layout/screen_simple_overlay_action_mode.xml)     1       0.2     0.25      0.2
+AssetManager::OpenXmlAsset(res/transition/fade.xml)     1       0.2     0.24      0.2
+AssetManager::OpenXmlAsset(res/interpolator/fast_out_linear_in.xml)     1       0.2     0.23      0.2
+AssetManager::OpenXmlAsset(res/transition/move.xml)     1       0.2     0.22      0.2
+relayoutWindow: updateOrientationFromAppTokens     2       0.2     0.09      0.1
+drawLayer [NearestTouchFrame] 1080.0 x 126.0     1       0.2     0.17      0.2
+UnhandledKeyEvent dispatch           3       0.1     0.04      0.1
+Theme::ApplyStyle                    2       0.1     0.05      0.1
+openSurfaceTransaction               2       0.1     0.04      0.0
+VM.totalSizeGb                       1       0.1     0.05      0.1
+createSurfaceControl                 2       0.0     0.02      0.0
+ResourcesManager#applyConfigurationToResourcesLocked     1       0.0     0.02      0.0
+traceStateLocked                     2       0.0     0.01      0.0
+AssetManager::GetBag                 2       0.0     0.01      0.0
+finishDrawingLocked: tech.capullo.telecloudradio     1       0.0     0.01      0.0
+finishDrawingLocked: com.sec.android.inputmethod     1       0.0     0.01      0.0
+alpha caused saveLayer 1080x126      1       0.0     0.00      0.0

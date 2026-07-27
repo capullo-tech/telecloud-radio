@@ -1,0 +1,87 @@
+section                          count  total_ms  mean_ms   max_ms
+doSomeWork                        2422    8509.9     3.51     15.4
+drainAndFeed                      2423    7486.6     3.09     14.8
+Choreographer#doFrame              480    6927.3    14.43    340.0
+DrawFrame                          433    4988.4    11.52     43.4
+traversal                          409    4033.3     9.86    245.2
+draw                               445    3541.5     7.96    129.1
+animation                          404    2442.4     6.05    112.2
+Record View#draw()                 444    1866.2     4.20    128.4
+AndroidOwner:measureAndLayout      384    1455.4     3.79    106.7
+Recomposer:recompose               321    1140.6     3.55    110.5
+Compose:recompose                  313    1058.3     3.38     77.5
+flush commands                     458    1023.8     2.24     32.4
+Recomposer:animation               232     548.1     2.36     28.0
+AndroidOwner:onTouch               127     394.1     3.10     30.3
+input                              388     372.6     0.96     10.1
+Compose:applyChanges               214     279.5     1.31     20.3
+dispatchFrameCallbacks              42     269.3     6.41     16.3
+prepareAndDraw                      28     265.4     9.48     16.3
+TextStringSimpleNode::measure      229     253.9     1.11      8.1
+syncFrameState                     433     239.4     0.55      4.0
+prepareTree                        461     187.1     0.41      3.9
+compose:lazy:prefetch:compose       40     183.2     4.58     18.6
+TextLayout:initLayout              313     140.2     0.45      1.8
+compose:lazy:prefetch:execute:urgent    33     117.3     3.55     30.3
+measure                             15     111.2     7.41    100.5
+AndroidOwner:onMeasure               6     100.9    16.81     99.4
+compose:lazy:prefetch:idle_frame    15      79.4     5.30     30.4
+compose:lazy:prefetch:measure       14      70.7     5.05      8.5
+PausedComposition:applyChanges      20      57.5     2.88      6.1
+Bitmap#prepareToDraw 63x63          54      50.2     0.93      2.7
+AndroidOwner:outOfFrameExecutor     38      48.6     1.28      5.7
+layout                              11      46.3     4.21     27.9
+compose:lazy:prefetch:apply         14      45.9     3.28      6.4
+Compose:deactivate                  47      44.1     0.94      3.9
+Compose:onRemembered                67      43.3     0.65     22.0
+Compose:onForgotten                 68      38.2     0.56      7.9
+serviceBind                          3      32.8    10.92     22.8
+Shader Compile                       2      28.2    14.11     15.2
+FocusTransactions:requestFocus       1      21.7    21.68     21.7
+VM.positionTick                     49      16.5     0.34      1.0
+frameComplete 1                      2      10.4     5.22      8.8
+Compose:sideeffects                 87      10.1     0.12      1.8
+Compose:recordChanges               45      10.0     0.22      0.7
+FocusOwnerImpl:dispatchKeyEvent      6       7.9     1.31      3.5
+inflate                              1       7.2     7.22      7.2
+VM.publishQueue                      1       5.7     5.67      5.7
+drainDisplayEventQueue              74       4.6     0.06      0.2
+notifyFramePending                 435       4.1     0.01      0.3
+FrameLayout                          2       3.5     1.75      2.5
+Sheet.libraryFilter                  4       3.1     0.78      1.2
+serviceCreate: CreateServiceData{token=android.os.BinderProxy@c6033bb className=com.google.android.location.reporting.service.ReportingAndroidService packageName=com.google.android.gms intent=null}     1       3.1     3.11      3.1
+VM.refreshNextTrack                  3       2.8     0.94      1.2
+Sheet.uploaderOptions                1       2.6     2.61      2.6
+compose:lazy:prefetch:resolve-nested    14       2.4     0.17      0.4
+Filters.uploaderKey                 28       2.2     0.08      0.3
+Filters.matches                    112       1.9     0.02      0.2
+flush layers                         2       1.9     0.94      1.2
+Sheet.dateOptions                    1       1.9     1.86      1.9
+Filters.monthKey                    28       1.6     0.06      0.3
+Sheet.librarySort                    4       1.3     0.32      0.7
+setSurface                           1       1.2     1.20      1.2
+Compose:unobserve                   41       1.1     0.03      0.1
+Sheet.gbString                       3       1.1     0.38      0.4
+queue mFrameCallbackTask            42       1.0     0.02      0.0
+res/drawable-xxhdpi-v4/textinput_qwerty_candidate_btn_down.bmp     1       0.9     0.90      0.9
+Sheet.queueSearch                    2       0.9     0.43      0.5
+VM.prefetchAhead                     1       0.8     0.75      0.8
+Bitmap#prepareToDraw 47x47           1       0.7     0.65      0.7
+Compose:Composer.dispose            12       0.5     0.04      0.2
+ViewStub                             1       0.5     0.46      0.5
+drawLayer [ViewLayer] 126.0 x 126.0     2       0.5     0.23      0.3
+AssetManager::OpenXmlAsset(res/interpolator/linear_out_slow_in.xml)     1       0.4     0.44      0.4
+alpha caused saveLayer 126x126      36       0.3     0.01      0.0
+AssetManager::OpenXmlAsset(res/layout/screen_simple_overlay_action_mode.xml)     1       0.3     0.27      0.3
+AssetManager::OpenXmlAsset(res/interpolator/fast_out_linear_in.xml)     1       0.3     0.26      0.3
+AssetManager::OpenXmlAsset(res/transition/move.xml)     1       0.3     0.26      0.3
+AssetManager::OpenXmlAsset(res/transition/fade.xml)     1       0.2     0.23      0.2
+Sheet.extOptions                     1       0.2     0.19      0.2
+ShaderCache::store                   2       0.2     0.08      0.1
+AssetManager::OpenNonAsset(res/drawable-xxhdpi-v4/textinput_qwerty_candidate_btn_down.bmp)     1       0.1     0.12      0.1
+Theme::ApplyStyle                    2       0.1     0.05      0.1
+VM.totalSizeGb                       1       0.1     0.08      0.1
+UnhandledKeyEvent dispatch           3       0.1     0.03      0.0
+ShaderCache::load                    2       0.0     0.02      0.0
+AssetManager::GetBag                 2       0.0     0.01      0.0
+ResourcesManager#applyConfigurationToResourcesLocked     1       0.0     0.02      0.0
