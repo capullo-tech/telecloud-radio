@@ -28,6 +28,12 @@ class ActiveTrackRepository @Inject constructor() {
     private val _command = MutableSharedFlow<PlaybackCommand>(extraBufferCapacity = 1)
     val command: SharedFlow<PlaybackCommand> = _command.asSharedFlow()
 
+    // One-off user-facing notices raised from non-UI layers (e.g. PlaybackService's silence
+    // watchdog skipping a track that decodes to silence). PlayerViewModel forwards these to the
+    // player screen's snackbar.
+    private val _messages = MutableSharedFlow<String>(extraBufferCapacity = 1)
+    val messages: SharedFlow<String> = _messages.asSharedFlow()
+
     fun set(track: MediaMessageEntity, chatId: Long, chatTitle: String) {
         _activePlayback.value = ActivePlayback(track, chatId, chatTitle)
     }
@@ -48,6 +54,10 @@ class ActiveTrackRepository @Inject constructor() {
 
     fun emitCommand(cmd: PlaybackCommand) {
         _command.tryEmit(cmd)
+    }
+
+    fun emitMessage(message: String) {
+        _messages.tryEmit(message)
     }
 
     fun clear() {
