@@ -15,7 +15,7 @@ android {
 
     defaultConfig {
         applicationId = "tech.capullo.telecloudradio"
-        minSdk = 24
+        minSdk = 23
         targetSdk = 36
         versionCode = 9
         versionName = "1.0"
