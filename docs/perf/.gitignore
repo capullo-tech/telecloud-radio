@@ -1,0 +1,4 @@
+# Raw capture artifacts (large, regenerable via scripts/perf/) - keep only parsed summaries.
+atrace_*.txt
+framestats_*.txt
+compose-reports/

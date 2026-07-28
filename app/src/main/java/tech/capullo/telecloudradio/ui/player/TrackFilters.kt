@@ -3,6 +3,7 @@ package tech.capullo.telecloudradio.ui.player
 import org.json.JSONArray
 import org.json.JSONObject
 import tech.capullo.telecloudradio.data.db.MediaMessageEntity
+import tech.capullo.telecloudradio.util.PerfTrace
 import java.text.SimpleDateFormat
 import java.util.Calendar
 import java.util.Date
@@ -30,20 +31,26 @@ internal fun extractUploaderFromFilename(fileName: String?): String? {
 }
 
 // Same chain as the now-playing label, plus Telegram sender as a last resort
-internal fun uploaderKey(track: MediaMessageEntity): String? = extractUploader(track.caption)
-    ?: extractUploaderFromFilename(track.fileName)
-    ?: track.senderUsername?.let { "@$it" }
-    ?: track.senderId?.let { "user $it" }
+internal fun uploaderKey(track: MediaMessageEntity): String? = PerfTrace.section("Filters.uploaderKey") {
+    extractUploader(track.caption)
+        ?: extractUploaderFromFilename(track.fileName)
+        ?: track.senderUsername?.let { "@$it" }
+        ?: track.senderId?.let { "user $it" }
+}
 
 internal fun extensionKey(track: MediaMessageEntity): String? = track.fileName?.substringAfterLast('.', "")?.lowercase()
     ?.takeIf { it.isNotBlank() && it.length <= 5 && it.none(Char::isWhitespace) }
     ?: track.mimeType?.substringAfterLast('/')?.lowercase()
 
-internal fun monthKey(dateStr: String?): String? {
-    if (dateStr.isNullOrBlank()) return null
-    return try {
+// SimpleDateFormat is not thread-safe, so keep one per thread via ThreadLocal rather than a
+// plain shared val (matches() stays on main today, but this keeps monthKey safe anywhere).
+private val monthFormat = ThreadLocal.withInitial { SimpleDateFormat("MMM yyyy", Locale.getDefault()) }
+
+internal fun monthKey(dateStr: String?): String? = PerfTrace.section("Filters.monthKey") {
+    if (dateStr.isNullOrBlank()) return@section null
+    try {
         val epochSeconds = dateStr.toLong()
-        SimpleDateFormat("MMM yyyy", Locale.getDefault()).format(Date(epochSeconds * 1000))
+        monthFormat.get().format(Date(epochSeconds * 1000))
     } catch (_: Exception) {
         null
     }
@@ -65,15 +72,15 @@ private fun startOfTodayEpoch(): Long = Calendar.getInstance().apply {
     set(Calendar.MILLISECOND, 0)
 }.timeInMillis / 1000
 
-// key is either a relative preset or a "MMM yyyy" month bucket
-internal fun matchesDateKey(dateStr: String?, key: String): Boolean {
+// key is either a relative preset or a "MMM yyyy" month bucket; todayEpoch is start-of-today
+// in epoch seconds, computed once per QueueFilters.matches call and passed down.
+internal fun matchesDateKey(dateStr: String?, key: String, todayEpoch: Long): Boolean {
     val epoch = dateStr?.toLongOrNull() ?: return false
-    val today = startOfTodayEpoch()
     return when (key) {
-        DATE_TODAY -> epoch >= today
-        DATE_YESTERDAY -> epoch >= today - DAY_SECONDS && epoch < today
-        DATE_THIS_WEEK -> epoch >= today - 6 * DAY_SECONDS // rolling 7 days
-        DATE_LAST_TWO_WEEKS -> epoch >= today - 13 * DAY_SECONDS
+        DATE_TODAY -> epoch >= todayEpoch
+        DATE_YESTERDAY -> epoch >= todayEpoch - DAY_SECONDS && epoch < todayEpoch
+        DATE_THIS_WEEK -> epoch >= todayEpoch - 6 * DAY_SECONDS // rolling 7 days
+        DATE_LAST_TWO_WEEKS -> epoch >= todayEpoch - 13 * DAY_SECONDS
         else -> monthKey(dateStr) == key
     }
 }
@@ -89,10 +96,12 @@ data class QueueFilters(
         get() = uploaders.isNotEmpty() || months.isNotEmpty() ||
             extensions.isNotEmpty() || search.isNotBlank()
 
-    fun matches(track: MediaMessageEntity): Boolean {
+    fun matches(track: MediaMessageEntity): Boolean = PerfTrace.section("Filters.matches") {
         val q = search.trim().lowercase()
-        return (uploaders.isEmpty() || (uploaderKey(track) ?: "") in uploaders) &&
-            (months.isEmpty() || months.any { matchesDateKey(track.date, it) }) &&
+        // Computed once per matches() call instead of per track per month key
+        val todayEpoch = if (months.isEmpty()) 0L else startOfTodayEpoch()
+        (uploaders.isEmpty() || (uploaderKey(track) ?: "") in uploaders) &&
+            (months.isEmpty() || months.any { matchesDateKey(track.date, it, todayEpoch) }) &&
             (extensions.isEmpty() || (extensionKey(track) ?: "") in extensions) &&
             (
                 q.isEmpty() ||

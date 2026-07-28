@@ -23,6 +23,7 @@ import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.drop
@@ -45,6 +46,7 @@ import tech.capullo.telecloudradio.player.AudioMetadata
 import tech.capullo.telecloudradio.player.AudioMetadataReader
 import tech.capullo.telecloudradio.player.DownloadManager
 import tech.capullo.telecloudradio.player.PlaybackService
+import tech.capullo.telecloudradio.util.PerfTrace
 import java.io.File
 import javax.inject.Inject
 import kotlin.coroutines.resume
@@ -67,25 +69,17 @@ data class PlayerUiState(
     val displayPlaylist: List<MediaMessageEntity> = emptyList(),
     val unfilteredPlaylist: List<MediaMessageEntity> = emptyList(),
     val queueFilters: QueueFilters = QueueFilters(),
-    val currentPosition: Long = 0L,
     val trackDuration: Long = 0L,
     val isOffline: Boolean = false,
-    // Download progress (0f..1f) of the current/active track while it's downloading, so the play
-    // button can show a determinate ring instead of an indeterminate spinner. Null before the first
-    // progress tick (or once the file is on disk) → the button falls back to indeterminate.
-    val downloadProgress: Float? = null,
     val audioMeta: AudioMetadata? = null,
     val showStats: Boolean = false,
     val audioAnalysis: AudioAnalysisEntity? = null,
     val isAnalyzing: Boolean = false,
     val nextTrackReady: Boolean = false,
-    val nextDownloadProgress: Float? = null,
     val showReactions: Boolean = false,
     val reactionsInfo: MessageReactionsInfo? = null,
     val reactionsLoading: Boolean = false,
     val sleepTimerActive: Boolean = false,
-    // Seconds until the timer fires; 0 while waiting for the current track to finish
-    val sleepTimerSecondsRemaining: Int = 0,
 )
 
 @HiltViewModel
@@ -109,6 +103,26 @@ class PlayerViewModel @Inject constructor(
     private val _downloadToast = MutableSharedFlow<String>(extraBufferCapacity = 1)
     val downloadToast = _downloadToast.asSharedFlow()
 
+    // High-frequency fields live OUTSIDE PlayerUiState so their ticks don't recompose the whole
+    // PlayerScreen (uiState is collected at the screen root): position (500 ms), TDLib download
+    // progress, and the sleep countdown (1 s) are collected only by the leaf composables that
+    // render them.
+    private val _positionState = MutableStateFlow(0L)
+    val positionState: StateFlow<Long> = _positionState.asStateFlow()
+
+    // Download progress (0f..1f) of the current/active track while it's downloading, so the play
+    // button can show a determinate ring instead of an indeterminate spinner. Null before the first
+    // progress tick (or once the file is on disk) → the button falls back to indeterminate.
+    private val _activeDownloadProgress = MutableStateFlow<Float?>(null)
+    val activeDownloadProgress: StateFlow<Float?> = _activeDownloadProgress.asStateFlow()
+
+    private val _nextDownloadProgress = MutableStateFlow<Float?>(null)
+    val nextDownloadProgress: StateFlow<Float?> = _nextDownloadProgress.asStateFlow()
+
+    // Seconds until the timer fires; 0 while waiting for the current track to finish
+    private val _sleepTimerSecondsRemaining = MutableStateFlow(0)
+    val sleepTimerSecondsRemaining: StateFlow<Int> = _sleepTimerSecondsRemaining.asStateFlow()
+
     private var controller: MediaController? = null
     private var orderedPlaylist: List<MediaMessageEntity> = emptyList()
 
@@ -120,6 +134,15 @@ class PlayerViewModel @Inject constructor(
     private var readinessJob: Job? = null
     private var positionJob: Job? = null
     private var sleepTimerJob: Job? = null
+    private var saveJob: Job? = null
+
+    // totalSizeGb cache: every queue mutator replaces `playlist` with a new list instance
+    // (toMutableList / + / filter), so reference identity is a valid invalidation key.
+    private var cachedSizeGbTrackList: List<MediaMessageEntity>? = null
+    private var cachedTotalSizeGb: Double = 0.0
+
+    // Last prefetch window handed to prefetchJob; used to skip pointless cancel/relaunch cycles.
+    private var lastPrefetchWindow: List<Int>? = null
 
     // Set when the countdown hit zero mid-track: playback finishes the current
     // track, then onTrackEnded pauses instead of advancing.
@@ -207,29 +230,50 @@ class PlayerViewModel @Inject constructor(
             }
         }
         viewModelScope.launch {
+            // refreshNextTrackState() is only needed when the next track's map entry appears or
+            // disappears - running it per tick spawned a coroutine for every progress update.
+            var hadNextEntry = false
             downloadManager.downloadProgress.collect { map ->
-                // Active-track progress → determinate ring on the play button (independent of the
-                // next-track wiring below). Only *raise* it here; the map entry is torn down the
-                // instant the download returns (before playback is prepared), so nulling it here
-                // would snap the ring back to empty mid-load. playTrack owns resetting it to null
-                // at the start of a load and to 1f on completion, so the ring lands full.
-                val activeProgress = downloadManager.activeMessageId?.let { map[it] }
-                if (activeProgress != null && _uiState.value.downloadProgress != activeProgress) {
-                    _uiState.value = _uiState.value.copy(downloadProgress = activeProgress)
-                }
-                val nextId = nextIndex()?.let { playlist.getOrNull(it)?.messageId }
-                val progress = nextId?.let { map[it] }
-                if (progress != null) {
-                    _uiState.value = _uiState.value.copy(
-                        nextDownloadProgress = progress,
-                        nextTrackReady = false,
-                    )
-                } else {
-                    // No download in flight for the next track - verify cache/DB
-                    refreshNextTrackState()
+                // Whole body is synchronous (no suspensions), so one balanced section is safe.
+                PerfTrace.section("VM.downloadProgressTick") {
+                    // Active-track progress → determinate ring on the play button (independent of the
+                    // next-track wiring below). Only *raise* it here; the map entry is torn down the
+                    // instant the download returns (before playback is prepared), so nulling it here
+                    // would snap the ring back to empty mid-load. playTrack owns resetting it to null
+                    // at the start of a load and to 1f on completion, so the ring lands full.
+                    val activeProgress = downloadManager.activeMessageId?.let { map[it] }
+                    if (activeProgress != null) {
+                        _activeDownloadProgress.emitProgress(activeProgress)
+                    }
+                    val nextId = nextIndex()?.let { playlist.getOrNull(it)?.messageId }
+                    val progress = nextId?.let { map[it] }
+                    if (progress != null) {
+                        hadNextEntry = true
+                        _nextDownloadProgress.emitProgress(progress)
+                        if (_uiState.value.nextTrackReady) {
+                            _uiState.value = _uiState.value.copy(nextTrackReady = false)
+                        }
+                    } else if (hadNextEntry) {
+                        // Next-track download just left the map - verify cache/DB once
+                        hadNextEntry = false
+                        refreshNextTrackState()
+                    }
                 }
             }
         }
+    }
+
+    // Conflate high-frequency TDLib progress ticks: sub-1% steps are invisible on the rings,
+    // so don't emit them; but transitions to/from null (ring appears/disappears) and completion
+    // (1f, the ring must visibly land full) always go through.
+    private fun MutableStateFlow<Float?>.emitProgress(value: Float) {
+        val cur = this.value
+        val emit = when {
+            cur == null -> true
+            value == 1f || cur == 1f -> value != cur
+            else -> kotlin.math.abs(value - cur) >= 0.01f
+        }
+        if (emit) this.value = value
     }
 
     private fun nextIndex(): Int? {
@@ -248,14 +292,18 @@ class PlayerViewModel @Inject constructor(
     // or an orphaned refresher spawned inside prefetchAhead that prefetchJob.cancel() doesn't
     // reach) could land its `false` last and wedge the Next button grey with nothing to re-run it.
     private fun refreshNextTrackState() {
-        readinessJob?.cancel()
-        readinessJob = viewModelScope.launch {
-            val ni = nextIndex()
-            val nextId = ni?.let { playlist.getOrNull(it)?.messageId }
-            _uiState.value = _uiState.value.copy(
-                nextTrackReady = nextId != null && downloadManager.isDownloaded(nextId),
-                nextDownloadProgress = nextId?.let { downloadManager.downloadProgress.value[it] },
-            )
+        // Section covers only the synchronous cancel+launch; the launched body suspends.
+        PerfTrace.section("VM.refreshNextTrack") {
+            readinessJob?.cancel()
+            readinessJob = viewModelScope.launch {
+                val ni = nextIndex()
+                val nextId = ni?.let { playlist.getOrNull(it)?.messageId }
+                _nextDownloadProgress.value =
+                    nextId?.let { downloadManager.downloadProgress.value[it] }
+                _uiState.value = _uiState.value.copy(
+                    nextTrackReady = nextId != null && downloadManager.isDownloaded(nextId),
+                )
+            }
         }
     }
 
@@ -380,18 +428,40 @@ class PlayerViewModel @Inject constructor(
     }
 
     private fun saveQueueState() {
-        if (chatId == 0L) return
-        context.getSharedPreferences("player_prefs", Context.MODE_PRIVATE).edit()
-            .putString("queue_ids_$chatId", playlist.joinToString(",") { it.messageId.toString() })
-            .putString(
-                "base_ids_$chatId",
-                basePlaylist.joinToString(",") {
-                    it.messageId.toString()
-                },
-            )
-            .putString("play_order_$chatId", _uiState.value.playOrder.name)
-            .putString("filters_$chatId", _uiState.value.queueFilters.toJson())
-            .apply()
+        // Debounced + off-main: rapid queue edits (reorder/remove bursts) collapse into one
+        // write. The delay comes FIRST, then the snapshot is taken on IO - delay-then-write,
+        // never throttle-first, so the final save always lands. playlist/basePlaylist/chatId
+        // and the uiState fields below are only mutated on the main thread, so reading the
+        // latest values here after the debounce gives a consistent-enough snapshot
+        // (last-write-wins).
+        saveJob?.cancel()
+        saveJob = viewModelScope.launch(Dispatchers.IO) {
+            delay(500L)
+            writeQueueStateNow()
+        }
+    }
+
+    // The actual snapshot+write. Called from the debounced save on IO, and synchronously from
+    // onCleared so a pending save is never dropped when the VM is destroyed (back-navigation
+    // within the 500 ms debounce window).
+    private fun writeQueueStateNow() {
+        PerfTrace.section("VM.saveQueueState") {
+            if (chatId == 0L) return@section
+            context.getSharedPreferences("player_prefs", Context.MODE_PRIVATE).edit()
+                .putString(
+                    "queue_ids_$chatId",
+                    playlist.joinToString(",") { it.messageId.toString() },
+                )
+                .putString(
+                    "base_ids_$chatId",
+                    basePlaylist.joinToString(",") {
+                        it.messageId.toString()
+                    },
+                )
+                .putString("play_order_$chatId", _uiState.value.playOrder.name)
+                .putString("filters_$chatId", _uiState.value.queueFilters.toJson())
+                .apply()
+        }
     }
 
     // Drops deleted tracks from library + queue; returns how many queue rows went away.
@@ -459,29 +529,46 @@ class PlayerViewModel @Inject constructor(
     // Publishes the current queue to UI state and re-targets readiness/prefetch.
     // Callers mutate `playlist`/`currentIndex` first, then call this.
     private fun publishQueue() {
-        _uiState.value = _uiState.value.copy(
-            totalTracks = playlist.size,
-            currentIndex = currentIndex,
-            displayPlaylist = playlist,
-            unfilteredPlaylist = basePlaylist,
-            totalSizeGb = playlist.sumOf { it.fileSize ?: 0L } / (1024.0 * 1024.0 * 1024.0),
-        )
-        refreshNextTrackState()
-        // Prefetch even before playback starts (e.g. shuffling right after app open) -
-        // otherwise "next" stays greyed with nothing downloading it
-        if (playlist.isNotEmpty()) prefetchAhead(currentIndex)
-        saveQueueState()
+        PerfTrace.section("VM.publishQueue") {
+            _uiState.value = _uiState.value.copy(
+                totalTracks = playlist.size,
+                currentIndex = currentIndex,
+                displayPlaylist = playlist,
+                unfilteredPlaylist = basePlaylist,
+                totalSizeGb = PerfTrace.section("VM.totalSizeGb") {
+                    if (playlist === cachedSizeGbTrackList) {
+                        cachedTotalSizeGb
+                    } else {
+                        (playlist.sumOf { it.fileSize ?: 0L } / (1024.0 * 1024.0 * 1024.0)).also {
+                            cachedSizeGbTrackList = playlist
+                            cachedTotalSizeGb = it
+                        }
+                    }
+                },
+            )
+            refreshNextTrackState()
+            // Prefetch even before playback starts (e.g. shuffling right after app open) -
+            // otherwise "next" stays greyed with nothing downloading it
+            if (playlist.isNotEmpty()) prefetchAhead(currentIndex)
+            saveQueueState()
+        }
     }
 
     // Rebuilds the queue from the library (basePlaylist + filters), discarding manual
     // queue edits. Used on load, order cycle, connectivity reload, and filter Apply.
     private fun rebuildActivePlaylist() {
-        val filters = _uiState.value.queueFilters
-        playlist = if (filters.isActive) basePlaylist.filter(filters::matches) else basePlaylist
-        val currentId = _uiState.value.track?.messageId
-        // -1 when the playing track is excluded by the filters; "next" then starts at 0
-        currentIndex = currentId?.let { id -> playlist.indexOfFirst { it.messageId == id } } ?: -1
-        publishQueue()
+        PerfTrace.section("VM.rebuildActivePlaylist") {
+            val filters = _uiState.value.queueFilters
+            playlist = if (filters.isActive) {
+                PerfTrace.section("VM.filterMatches") { basePlaylist.filter(filters::matches) }
+            } else {
+                basePlaylist
+            }
+            val currentId = _uiState.value.track?.messageId
+            // -1 when the playing track is excluded by the filters; "next" then starts at 0
+            currentIndex = currentId?.let { id -> playlist.indexOfFirst { it.messageId == id } } ?: -1
+            publishQueue()
+        }
     }
 
     fun setQueueFilters(filters: QueueFilters) {
@@ -600,8 +687,9 @@ class PlayerViewModel @Inject constructor(
         positionJob?.cancel()
         positionJob = viewModelScope.launch {
             while (true) {
-                _uiState.value =
-                    _uiState.value.copy(currentPosition = controller?.currentPosition ?: 0L)
+                PerfTrace.section("VM.positionTick") {
+                    _positionState.value = controller?.currentPosition ?: 0L
+                }
                 delay(500L)
             }
         }
@@ -613,16 +701,14 @@ class PlayerViewModel @Inject constructor(
             return
         }
         val totalSec = settings.sleepTimerMinutes * 60
-        _uiState.value = _uiState.value.copy(
-            sleepTimerActive = true,
-            sleepTimerSecondsRemaining = totalSec,
-        )
+        _sleepTimerSecondsRemaining.value = totalSec
+        _uiState.value = _uiState.value.copy(sleepTimerActive = true)
         sleepTimerJob = viewModelScope.launch {
             var remaining = totalSec
             while (remaining > 0) {
                 delay(1_000L)
                 remaining--
-                _uiState.value = _uiState.value.copy(sleepTimerSecondsRemaining = remaining)
+                _sleepTimerSecondsRemaining.value = remaining
             }
             // Countdown done - let the current track play out, then pause
             if (controller?.isPlaying == true) {
@@ -637,8 +723,8 @@ class PlayerViewModel @Inject constructor(
         sleepTimerJob?.cancel()
         sleepTimerJob = null
         sleepAtTrackEnd = false
-        _uiState.value =
-            _uiState.value.copy(sleepTimerActive = false, sleepTimerSecondsRemaining = 0)
+        _sleepTimerSecondsRemaining.value = 0
+        _uiState.value = _uiState.value.copy(sleepTimerActive = false)
     }
 
     private fun onTrackEnded() {
@@ -690,7 +776,7 @@ class PlayerViewModel @Inject constructor(
         val position = controller?.currentPosition ?: 0L
         if (position > 3_000L) {
             controller?.seekTo(0L)
-            _uiState.value = _uiState.value.copy(currentPosition = 0L)
+            _positionState.value = 0L
         } else if (currentIndex > 0) {
             viewModelScope.launch { playTrack(currentIndex - 1) }
         }
@@ -744,7 +830,7 @@ class PlayerViewModel @Inject constructor(
     fun seekTo(positionMs: Long) {
         if (!controllerPreparedForCurrentChat) return
         controller?.seekTo(positionMs)
-        _uiState.value = _uiState.value.copy(currentPosition = positionMs)
+        _positionState.value = positionMs
     }
 
     fun toggleQueue() {
@@ -882,14 +968,14 @@ class PlayerViewModel @Inject constructor(
         // station, or first play, there is nothing to misrepresent, so swapping straight away is
         // both truthful and better feedback than a stale (or blank) player.
         val audibleTrack = _uiState.value.track != null && _uiState.value.isPlaying
+        _activeDownloadProgress.value = null
         _uiState.value = if (!audibleTrack) {
+            _positionState.value = 0L
             _uiState.value.copy(
                 track = track,
                 isLoading = true,
-                downloadProgress = null,
                 currentIndex = index,
                 albumArt = null,
-                currentPosition = 0L,
                 trackDuration = 0L,
                 audioMeta = null,
                 audioAnalysis = null,
@@ -898,7 +984,7 @@ class PlayerViewModel @Inject constructor(
                 reactionsInfo = null,
             )
         } else {
-            _uiState.value.copy(isLoading = true, downloadProgress = null)
+            _uiState.value.copy(isLoading = true)
         }
 
         downloadManager.activeMessageId = track.messageId
@@ -913,17 +999,17 @@ class PlayerViewModel @Inject constructor(
                 if (playlist.isNotEmpty()) {
                     playTrack(index.coerceAtMost(playlist.size - 1))
                 } else {
+                    _activeDownloadProgress.value = null
                     _uiState.value = _uiState.value.copy(
                         isLoading = false,
-                        downloadProgress = null,
                         error = "No tracks left in queue",
                     )
                 }
                 return
             }
+            _activeDownloadProgress.value = null
             _uiState.value = _uiState.value.copy(
                 isLoading = false,
-                downloadProgress = null,
                 error = "Download failed",
             )
             return
@@ -931,8 +1017,8 @@ class PlayerViewModel @Inject constructor(
         // If this load actually downloaded (ring was showing determinate progress), land it on
         // full so it visibly completes instead of snapping back to empty when the map entry is
         // torn down. Cached skips never set downloadProgress, so they show no ring at all.
-        if (_uiState.value.downloadProgress != null) {
-            _uiState.value = _uiState.value.copy(downloadProgress = 1f)
+        if (_activeDownloadProgress.value != null) {
+            _activeDownloadProgress.value = 1f
         }
 
         val (albumArt, audioMeta) = withContext(Dispatchers.IO) {
@@ -948,14 +1034,14 @@ class PlayerViewModel @Inject constructor(
         )
         // The file is ready and playback is about to start, so the swap is finally truthful. This
         // carries the fields deferred above, not just the metadata.
+        _activeDownloadProgress.value = null
+        _positionState.value = 0L
         _uiState.value = _uiState.value.copy(
             track = displayTrack,
             albumArt = albumArt,
             isLoading = false,
-            downloadProgress = null,
             audioMeta = audioMeta,
             currentIndex = index,
-            currentPosition = 0L,
             trackDuration = 0L,
             audioAnalysis = null,
             showStats = false,
@@ -1047,12 +1133,20 @@ class PlayerViewModel @Inject constructor(
     }
 
     private fun prefetchAhead(fromIndex: Int) {
-        prefetchJob?.cancel()
-        val window = prefetchWindow(fromIndex)
-        // Pin the current + upcoming tracks so enforceBuffer (which runs as each prefetch lands)
-        // can't evict a track we just prefetched - the window matches the loop below.
-        downloadManager.protectedMessageIds =
-            window.mapNotNull { playlist.getOrNull(it)?.messageId }.toSet()
+        // Synchronous setup only; the launched prefetch body suspends, so no section may span it.
+        val window = PerfTrace.section("VM.prefetchAhead") {
+            val w = prefetchWindow(fromIndex)
+            // Same window with a live prefetch job (e.g. a reorder/remove that left the upcoming
+            // tracks untouched): keep the in-flight download instead of cancelling/relaunching it.
+            if (w == lastPrefetchWindow && prefetchJob?.isActive == true) return
+            prefetchJob?.cancel()
+            // Pin the current + upcoming tracks so enforceBuffer (which runs as each prefetch lands)
+            // can't evict a track we just prefetched - the window matches the loop below.
+            downloadManager.protectedMessageIds =
+                w.mapNotNull { playlist.getOrNull(it)?.messageId }.toSet()
+            w
+        }
+        lastPrefetchWindow = window
         prefetchJob = viewModelScope.launch {
             for (i in window.drop(1)) {
                 val t = playlist[i]
@@ -1173,6 +1267,10 @@ class PlayerViewModel @Inject constructor(
         readinessJob?.cancel()
         positionJob?.cancel()
         sleepTimerJob?.cancel()
+        // Flush any pending debounced queue save - the VM (and its scope) dies here, so the
+        // 500 ms debounce job would otherwise be cancelled before writing.
+        saveJob?.cancel()
+        writeQueueStateNow()
         controller?.release()
         controller = null
         // Do NOT clear activePlayback here. This VM is scoped to the Player nav entry, so it is

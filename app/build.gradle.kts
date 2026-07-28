@@ -49,6 +49,15 @@ android {
             )
             signingConfig = signingConfigs.findByName("release")
         }
+        // Perf-measurement build: release-compiled (minify is off in release too, so this is
+        // near-identical perf-wise) but debuggable + debug-signed, which is required on API 28
+        // for atrace app sections and Studio profiling. See docs/perf/.
+        create("benchmark") {
+            initWith(getByName("release"))
+            signingConfig = signingConfigs.getByName("debug")
+            isDebuggable = true
+            matchingFallbacks += listOf("release")
+        }
     }
     compileOptions {
         sourceCompatibility = JavaVersion.VERSION_17
@@ -78,6 +87,12 @@ android {
         }
     }
 
+}
+
+// Compose compiler stability/skippability reports (perf groundwork; docs/perf/).
+composeCompiler {
+    reportsDestination = layout.buildDirectory.dir("compose-reports")
+    metricsDestination = layout.buildDirectory.dir("compose-metrics")
 }
 
 // Self-identifying APK copies: telecloud-radio-v<versionName>-vc<versionCode>-<variant>.apk under

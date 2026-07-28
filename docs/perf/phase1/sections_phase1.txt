@@ -1,0 +1,84 @@
+section                          count  total_ms  mean_ms   max_ms
+doSomeWork                        2423    8790.1     3.63     14.4
+drainAndFeed                      2423    7759.4     3.20     14.0
+Choreographer#doFrame              453    6731.0    14.86    382.7
+DrawFrame                          394    4538.7    11.52     37.8
+traversal                          375    3678.2     9.81    284.9
+draw                               408    3171.3     7.77    115.2
+animation                          371    2547.1     6.87    141.9
+Record View#draw()                 405    1740.8     4.30    114.0
+AndroidOwner:measureAndLayout      335    1564.9     4.67     90.8
+Compose:recompose                  276    1124.4     4.07     98.3
+Recomposer:recompose               289    1107.6     3.83    140.7
+flush commands                     409     856.7     2.09      8.4
+Recomposer:animation               201     492.1     2.45     34.2
+AndroidOwner:onTouch               123     463.6     3.77     26.1
+input                              361     430.7     1.19     10.2
+Compose:applyChanges               192     298.5     1.55     25.8
+TextStringSimpleNode::measure      249     232.0     0.93      3.4
+syncFrameState                     394     219.1     0.56      3.2
+prepareTree                        411     164.7     0.40      2.4
+measure                             15     143.0     9.54    126.9
+TextLayout:initLayout              334     131.7     0.39      3.1
+AndroidOwner:onMeasure               6     128.2    21.37    125.6
+dispatchFrameCallbacks              24     128.1     5.34     10.6
+prepareAndDraw                      17     124.8     7.34     10.4
+compose:lazy:prefetch:compose       23     117.5     5.11     13.0
+compose:lazy:prefetch:execute:urgent    26      95.4     3.67     17.9
+Bitmap#prepareToDraw 63x63          54      56.2     1.04      2.2
+AndroidOwner:outOfFrameExecutor     33      54.3     1.65      6.5
+Compose:deactivate                  49      49.6     1.01      2.7
+Compose:onForgotten                 71      48.0     0.68     11.8
+Compose:onRemembered                71      45.4     0.64     20.0
+compose:lazy:prefetch:idle_frame    13      42.2     3.24     18.1
+layout                              11      41.1     3.74     27.4
+PausedComposition:applyChanges      14      40.8     2.91      7.2
+compose:lazy:prefetch:measure        7      25.3     3.62      5.9
+Sheet.dateOptions                    1      23.6    23.62     23.6
+Filters.monthKey                    28      22.3     0.80      1.6
+compose:lazy:prefetch:apply          7      21.1     3.01      3.6
+VM.positionTick                     48      18.6     0.39      0.9
+FocusTransactions:requestFocus       1      18.6    18.55     18.6
+Sheet.uploaderOptions                1      11.0    10.97     11.0
+Compose:recordChanges               29      10.0     0.34      1.0
+Filters.uploaderKey                 28       9.7     0.35      0.8
+FocusOwnerImpl:dispatchKeyEvent      6       9.0     1.50      4.4
+Compose:sideeffects                 88       8.1     0.09      1.4
+VM.publishQueue                      1       7.8     7.77      7.8
+inflate                              1       6.6     6.59      6.6
+setSurface                           2       5.4     2.69      5.4
+Sheet.gbString                       9       4.1     0.45      0.8
+frameComplete 1                      2       4.0     1.98      2.9
+notifyFramePending                 398       3.9     0.01      0.2
+Sheet.libraryFilter                  4       3.5     0.88      1.8
+FrameLayout                          2       3.1     1.56      2.0
+VM.refreshNextTrack                  3       2.7     0.91      1.2
+VM.saveQueueState                    1       2.3     2.34      2.3
+drainDisplayEventQueue              50       2.3     0.05      0.1
+Filters.matches                    112       2.2     0.02      0.3
+AssetManager::OpenXmlAsset(res/interpolator/linear_out_slow_in.xml)     1       2.1     2.08      2.1
+flush layers                         3       1.9     0.64      1.0
+Sheet.queueSearch                    2       1.5     0.76      1.2
+Sheet.librarySort                    4       1.4     0.34      0.8
+Compose:unobserve                   42       1.2     0.03      0.2
+Compose:Composer.dispose            12       1.1     0.09      0.2
+Bitmap#prepareToDraw 47x47           1       1.0     1.03      1.0
+compose:lazy:prefetch:resolve-nested     7       0.9     0.13      0.2
+Sheet.extOptions                     1       0.8     0.84      0.8
+res/drawable-xxhdpi-v4/textinput_qwerty_candidate_btn_down.bmp     1       0.7     0.74      0.7
+drawLayer [ViewLayer] 126.0 x 126.0     3       0.6     0.20      0.4
+queue mFrameCallbackTask            24       0.6     0.02      0.0
+ViewStub                             1       0.5     0.53      0.5
+alpha caused saveLayer 126x126      46       0.5     0.01      0.0
+VM.prefetchAhead                     1       0.5     0.48      0.5
+AssetManager::OpenXmlAsset(res/layout/screen_simple_overlay_action_mode.xml)     1       0.3     0.30      0.3
+AssetManager::OpenXmlAsset(res/transition/fade.xml)     1       0.3     0.29      0.3
+AssetManager::OpenXmlAsset(res/transition/move.xml)     1       0.3     0.29      0.3
+AssetManager::OpenXmlAsset(res/interpolator/fast_out_linear_in.xml)     1       0.2     0.23      0.2
+AssetManager::OpenNonAsset(res/drawable-xxhdpi-v4/textinput_qwerty_candidate_btn_down.bmp)     1       0.1     0.13      0.1
+Theme::ApplyStyle                    2       0.1     0.05      0.1
+UnhandledKeyEvent dispatch           3       0.1     0.02      0.0
+VM.totalSizeGb                       1       0.1     0.06      0.1
+ResourcesManager#applyConfigurationToResourcesLocked     1       0.0     0.03      0.0
+AssetManager::GetBag                 2       0.0     0.01      0.0
+finishDrawingLocked: com.sec.android.inputmethod     1       0.0     0.01      0.0
