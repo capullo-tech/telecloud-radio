@@ -41,6 +41,7 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyListState
 import androidx.compose.foundation.lazy.itemsIndexed
@@ -484,13 +485,7 @@ private fun PortraitPlayer(
                 horizontalAlignment = Alignment.CenterHorizontally,
                 modifier = Modifier.padding(horizontal = 28.dp),
             ) {
-                TrackInfo(
-                    track = it,
-                    audioMeta = state.audioMeta,
-                    onDownload = viewModel::downloadCurrentTrack,
-                    onStats = viewModel::toggleStats,
-                    onReactions = viewModel::toggleReactions,
-                )
+                TrackInfo(track = it, audioMeta = state.audioMeta)
             }
         }
         Spacer(Modifier.height(16.dp))
@@ -501,7 +496,9 @@ private fun PortraitPlayer(
         ) {
             SeekBar(state = state, positionState = viewModel.positionState, onSeek = viewModel::seekTo)
             ControlBar(state = state, viewModel = viewModel)
-            // Secondary row: Multiroom (under the order button) · Playlist (under repeat)
+            // Secondary row: Multiroom (under the order button) · track actions · Playlist (under
+            // repeat). The multiroom and queue buttons are equal-width IconButtons on the outside,
+            // so the react/download/stats group between them stays optically centered.
             Row(
                 modifier = Modifier.fillMaxWidth(),
                 horizontalArrangement = Arrangement.SpaceBetween,
@@ -513,6 +510,31 @@ private fun PortraitPlayer(
                         anyConnected = anyConnected,
                         isListening = false,
                     )
+                }
+                Row(
+                    horizontalArrangement = Arrangement.spacedBy(4.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    ReactionButton(
+                        summary = state.track?.reactions,
+                        onClick = viewModel::toggleReactions,
+                    )
+                    IconButton(onClick = viewModel::downloadCurrentTrack) {
+                        Icon(
+                            Icons.Default.Download,
+                            contentDescription = "Download",
+                            modifier = Modifier.size(22.dp),
+                            tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    }
+                    IconButton(onClick = viewModel::toggleStats) {
+                        Icon(
+                            Icons.Default.Equalizer,
+                            contentDescription = "Stats for nerds",
+                            modifier = Modifier.size(22.dp),
+                            tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    }
                 }
                 IconButton(onClick = viewModel::toggleQueue) {
                     Icon(Icons.AutoMirrored.Filled.QueueMusic, contentDescription = "Queue")
@@ -938,14 +960,12 @@ private fun AlbumArtDisplay(albumArt: ByteArray?, modifier: Modifier = Modifier)
     }
 }
 
+// Pure text: title · artist · uploader/date · codec line. The react/download/stats controls
+// that used to be threaded between these lines (as 16-20dp targets, under half the 48dp
+// minimum) now live in the action row at the bottom of PortraitPlayer, which leaves this block
+// two rows shorter - and the art, being the layout's sole weight holder, takes back the space.
 @Composable
-private fun TrackInfo(
-    track: MediaMessageEntity,
-    audioMeta: AudioMetadata?,
-    onDownload: () -> Unit,
-    onStats: () -> Unit,
-    onReactions: () -> Unit,
-) {
+private fun TrackInfo(track: MediaMessageEntity, audioMeta: AudioMetadata?) {
     val title = track.title ?: track.fileName ?: "Unknown"
     val artist = track.performer
     val uploader = extractUploader(track.caption) ?: extractUploaderFromFilename(track.fileName)
@@ -970,45 +990,15 @@ private fun TrackInfo(
                 modifier = Modifier.basicMarquee(animationMode = MarqueeAnimationMode.Immediately),
             )
         }
-        Row(
-            verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(6.dp),
-            modifier = Modifier.clip(RoundedCornerShape(12.dp)).clickable(onClick = onReactions).padding(horizontal = 6.dp, vertical = 2.dp),
-        ) {
-            track.reactions?.let {
-                Text(it, style = MaterialTheme.typography.bodySmall)
-            }
-            Icon(
-                Icons.Outlined.AddReaction,
-                contentDescription = "React",
-                modifier = Modifier.size(16.dp),
-                tint = MaterialTheme.colorScheme.onSurfaceVariant,
-            )
-        }
         val uploaderLine = listOfNotNull(uploader, dateStr).joinToString(" · ")
-        Row(
-            verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(8.dp),
-        ) {
-            if (uploaderLine.isNotBlank()) {
-                Text(
-                    text = uploaderLine,
-                    style = MaterialTheme.typography.labelSmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    maxLines = 1,
-                    modifier = Modifier
-                        .weight(1f, fill = false)
-                        .basicMarquee(animationMode = MarqueeAnimationMode.Immediately),
-                )
-            }
-            IconButton(onClick = onDownload, modifier = Modifier.size(20.dp)) {
-                Icon(
-                    Icons.Default.Download,
-                    contentDescription = "Download",
-                    modifier = Modifier.size(16.dp),
-                    tint = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
-            }
+        if (uploaderLine.isNotBlank()) {
+            Text(
+                text = uploaderLine,
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                maxLines = 1,
+                modifier = Modifier.basicMarquee(animationMode = MarqueeAnimationMode.Immediately),
+            )
         }
         audioMeta?.let { meta ->
             val parts = listOfNotNull(
@@ -1018,25 +1008,58 @@ private fun TrackInfo(
                 meta.bitDepth?.let { "$it-bit" },
             )
             if (parts.isNotEmpty()) {
-                Row(
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(4.dp),
-                ) {
-                    Text(
-                        text = parts.joinToString(" · "),
-                        style = MaterialTheme.typography.labelSmall,
-                        color = MaterialTheme.colorScheme.outline,
-                        maxLines = 1,
-                    )
-                    IconButton(onClick = onStats, modifier = Modifier.size(20.dp)) {
-                        Icon(
-                            Icons.Default.Equalizer,
-                            contentDescription = "Stats for nerds",
-                            modifier = Modifier.size(16.dp),
-                            tint = MaterialTheme.colorScheme.outline,
-                        )
-                    }
-                }
+                Text(
+                    text = parts.joinToString(" · "),
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.outline,
+                    maxLines = 1,
+                )
+            }
+        }
+    }
+}
+
+// React control for the action row. With no reactions yet it's a plain icon button; once the
+// track carries a summary ("👍3 ❤2") it widens into a pill showing it, so the count stays on
+// the player without needing its own metadata line. Either shape keeps a >=48dp touch target.
+@Composable
+private fun ReactionButton(summary: String?, onClick: () -> Unit) {
+    if (summary.isNullOrBlank()) {
+        IconButton(onClick = onClick) {
+            Icon(
+                Icons.Outlined.AddReaction,
+                contentDescription = "React",
+                modifier = Modifier.size(22.dp),
+                tint = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        }
+    } else {
+        Surface(
+            onClick = onClick,
+            shape = RoundedCornerShape(24.dp),
+            color = MaterialTheme.colorScheme.surfaceContainerHighest,
+        ) {
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(6.dp),
+                modifier = Modifier
+                    .heightIn(min = 48.dp)
+                    .widthIn(max = 140.dp)
+                    .padding(horizontal = 12.dp),
+            ) {
+                Text(
+                    text = summary,
+                    style = MaterialTheme.typography.bodySmall,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                    modifier = Modifier.weight(1f, fill = false),
+                )
+                Icon(
+                    Icons.Outlined.AddReaction,
+                    contentDescription = "React",
+                    modifier = Modifier.size(16.dp),
+                    tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
             }
         }
     }
