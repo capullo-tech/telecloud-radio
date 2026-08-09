@@ -26,9 +26,14 @@ private val LightColorScheme = lightColorScheme(
 fun TelecloudRadioTheme(
     darkTheme: Boolean = isSystemInDarkTheme(),
     dynamicColor: Boolean = true,
+    // Cover of the currently active track, if any. Its dominant hue is tinted into the accent and
+    // surface roles so the whole app - player, mini player, sheets, station list - wears the
+    // colours of what is playing. Null (nothing playing, or art-less track) leaves the base
+    // scheme untouched, which is exactly the pre-existing look.
+    albumArt: ByteArray? = null,
     content: @Composable () -> Unit,
 ) {
-    val colorScheme = when {
+    val baseScheme = when {
         dynamicColor && Build.VERSION.SDK_INT >= Build.VERSION_CODES.S -> {
             val context = LocalContext.current
             if (darkTheme) dynamicDarkColorScheme(context) else dynamicLightColorScheme(context)
@@ -36,6 +41,8 @@ fun TelecloudRadioTheme(
         darkTheme -> DarkColorScheme
         else -> LightColorScheme
     }
+    val artSeed = rememberArtSeed(albumArt)
+    val colorScheme = artSeed?.let { baseScheme.tintedBy(it, darkTheme) } ?: baseScheme
 
     MaterialTheme(
         colorScheme = colorScheme,

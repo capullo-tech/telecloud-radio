@@ -19,6 +19,7 @@ composeLatest = "1.7.8"          # material-icons core/extended
 material3 = "1.5.0-alpha06"      # newer than the 2026.02.01 BOM's material3
 # --- TC single-app deps ---
 hiltNavigationCompose = "1.3.0"
+palette = "1.0.0"                # album-art colour extraction for the dynamic theme
 securityCrypto = "1.1.0-alpha06"
 startupRuntime = "1.2.0"
 mockk = "1.14.6"
@@ -36,6 +37,7 @@ androidx-compose-material-icons-core = { group = "androidx.compose.material", na
 androidx-compose-material-icons-extended = { group = "androidx.compose.material", name = "material-icons-extended", version.ref = "composeLatest" }
 # TC single-app deps.
 androidx-hilt-lifecycle-viewmodel-compose = { module = "androidx.hilt:hilt-lifecycle-viewmodel-compose", version.ref = "hiltNavigationCompose" }
+androidx-palette-ktx = { group = "androidx.palette", name = "palette-ktx", version.ref = "palette" }
 androidx-security-crypto = { group = "androidx.security", name = "security-crypto", version.ref = "securityCrypto" }
 androidx-startup-runtime = { group = "androidx.startup", name = "startup-runtime", version.ref = "startupRuntime" }
 mockk = { group = "io.mockk", name = "mockk", version.ref = "mockk" }
