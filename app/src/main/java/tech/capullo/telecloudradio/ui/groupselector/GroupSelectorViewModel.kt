@@ -41,6 +41,12 @@ class GroupSelectorViewModel @Inject constructor(
     // avatars aren't re-fetched every time a row scrolls back into view.
     private val photoPathCache = ConcurrentHashMap<Long, String>()
 
+    // The station opened most recently, for the "Last played" marker in the list. PlayerViewModel
+    // writes this on every station open (the rememberLastGroup setting only gates auto-RESUME, not
+    // the write), so it is always the real last one. Read once per composition rather than as a
+    // flow: it cannot change while this screen is the one on top.
+    val lastGroupId: Long get() = settings.lastGroupId
+
     init {
         // Initial load with the current value, then reload live whenever the "Stations" setting
         // changes - so the list repopulates immediately instead of only on (re)entry (E2). drop(1)
