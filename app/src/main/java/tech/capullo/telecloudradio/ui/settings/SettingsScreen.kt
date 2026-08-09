@@ -114,6 +114,9 @@ class SettingsViewModel @Inject constructor(
     val themeMode: StateFlow<ThemeMode> = settings.themeMode
     fun setThemeMode(mode: ThemeMode) = settings.setThemeMode(mode)
 
+    val artTheme: StateFlow<Boolean> = settings.artTheme
+    fun setArtTheme(enabled: Boolean) = settings.setArtTheme(enabled)
+
     val balance: StateFlow<Float> = settings.balance
     fun setBalance(value: Float) = settings.setBalance(value)
 
@@ -183,6 +186,23 @@ fun SettingsScreen(
                         shape = SegmentedButtonDefaults.itemShape(index = index, count = themeOptions.size),
                     ) { Text(label) }
                 }
+            }
+            val artTheme by viewModel.artTheme.collectAsStateWithLifecycle()
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = androidx.compose.ui.Alignment.CenterVertically,
+            ) {
+                Column(modifier = Modifier.weight(1f)) {
+                    Text("Colour from album art", style = MaterialTheme.typography.bodyMedium)
+                    Text(
+                        "Tint the app with the cover of whatever is playing. Off uses the system " +
+                            "colours instead.",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
+                Switch(checked = artTheme, onCheckedChange = viewModel::setArtTheme)
             }
 
             HorizontalDivider(modifier = Modifier.padding(vertical = 8.dp))

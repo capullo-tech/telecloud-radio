@@ -13,6 +13,7 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import dagger.hilt.android.AndroidEntryPoint
 import tech.capullo.telecloudradio.data.SettingsRepository
 import tech.capullo.telecloudradio.data.ThemeMode
+import tech.capullo.telecloudradio.data.playlist.ActiveTrackRepository
 import tech.capullo.telecloudradio.snapcast.SnapcastManager
 import tech.capullo.telecloudradio.ui.theme.TelecloudRadioTheme
 import javax.inject.Inject
@@ -23,6 +24,10 @@ class MainActivity : ComponentActivity() {
     @Inject lateinit var settings: SettingsRepository
 
     @Inject lateinit var snapcastManager: SnapcastManager
+
+    // Read only to feed the album-art tint into the theme; playback itself is driven by
+    // PlayerViewModel, which owns this repository's writes.
+    @Inject lateinit var activeTrackRepository: ActiveTrackRepository
 
     override fun onStart() {
         super.onStart()
@@ -69,7 +74,12 @@ class MainActivity : ComponentActivity() {
                 )
                 onDispose {}
             }
-            TelecloudRadioTheme(darkTheme = darkTheme) {
+            val artTheme by settings.artTheme.collectAsStateWithLifecycle()
+            val activePlayback by activeTrackRepository.activePlayback.collectAsStateWithLifecycle()
+            TelecloudRadioTheme(
+                darkTheme = darkTheme,
+                albumArt = activePlayback?.albumArt.takeIf { artTheme },
+            ) {
                 AppNavHost()
             }
         }

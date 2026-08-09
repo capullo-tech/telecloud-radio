@@ -88,6 +88,17 @@ class SettingsRepository @Inject constructor(@ApplicationContext context: Contex
         _themeMode.value = mode
     }
 
+    // Tint the app's accent + surface roles with the current cover's dominant hue. Off = the
+    // scheme MainActivity would build anyway (wallpaper dynamic colour on S+, else the static
+    // fallback). A flow for the same reason as themeMode: the toggle re-themes on the spot.
+    private val _artTheme = MutableStateFlow(prefs.getBoolean("art_theme", true))
+    val artTheme: StateFlow<Boolean> = _artTheme.asStateFlow()
+
+    fun setArtTheme(enabled: Boolean) {
+        prefs.edit().putBoolean("art_theme", enabled).apply()
+        _artTheme.value = enabled
+    }
+
     // Human-facing name this device advertises over NSD (what other devices see when
     // scanning) and uses for its own snapclient entry. Blank = fall back to the device
     // model. A flow so SnapcastManager can re-advertise live when it changes mid-broadcast.

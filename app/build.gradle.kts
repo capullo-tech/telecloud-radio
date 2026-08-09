@@ -141,6 +141,8 @@ dependencies {
     implementation(libs.androidx.lifecycle.runtime.ktx)
     implementation(libs.androidx.lifecycle.viewmodel.compose)
     implementation(pins.androidx.startup.runtime)
+    // Album-art colour extraction feeding the dynamic theme (see ui/theme/AlbumArtTheme.kt).
+    implementation(pins.androidx.palette.ktx)
     implementation(libs.room.runtime)
     implementation(libs.room.ktx)
     implementation(libs.media3.exoplayer)
