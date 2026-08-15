@@ -205,13 +205,24 @@ private fun ChatList(
     onJoinManual: (host: String, typedPort: Int?) -> Unit,
     photoLoader: suspend (TelegramChat) -> String?,
 ) {
-    // Survives rotation but not a trip to the player and back - re-entering the screen reloads the
-    // list from scratch anyway, so a stale filter would only hide stations for no reason.
+    // rememberSaveable so the filter survives rotation, but not opening a station: ChatList leaves
+    // composition at the Syncing state, and backToList() re-queries on the way out - so the screen
+    // is always re-entered with a fresh list and an empty field.
     var query by rememberSaveable { mutableStateOf("") }
-    val filtered = remember(chats, query) {
+    val searchable = chats.size >= SEARCH_THRESHOLD
+    val filtered = remember(chats, query, searchable) {
         val needle = query.trim()
-        if (needle.isEmpty()) chats else chats.filter { it.title.contains(needle, ignoreCase = true) }
+        if (!searchable || needle.isEmpty()) {
+            chats
+        } else {
+            chats.filter { it.title.contains(needle, ignoreCase = true) }
+        }
     }
+    // Lowering the Stations limit reloads the list live (GroupSelectorViewModel), which can pull it
+    // under the threshold and take the field away mid-query. Filtering is gated on `searchable`
+    // above so the rows come back in the same frame the field goes; this just drops the orphaned
+    // text, so raising the limit again doesn't restore a filter the user has forgotten about.
+    LaunchedEffect(searchable) { if (!searchable) query = "" }
 
     LazyColumn(
         modifier = Modifier.fillMaxSize(),
@@ -226,7 +237,7 @@ private fun ChatList(
                 onJoinManual = onJoinManual,
             )
         }
-        if (chats.size >= SEARCH_THRESHOLD) {
+        if (searchable) {
             // Sticky so the filter stays reachable once the radar section and the first rows have
             // scrolled past; the Surface gives it an opaque backdrop to sit on.
             stickyHeader {
