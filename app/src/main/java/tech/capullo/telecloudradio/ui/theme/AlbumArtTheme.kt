@@ -22,7 +22,8 @@ import kotlinx.coroutines.withContext
 // would fight the OS dynamic colour the app already opts into, and a full tonal-palette generator
 // is not public API in Compose Material3 (androidx.compose.material3.internal.colorUtil is
 // internal), so the choice is between a third-party port and this. Tinting the base keeps the
-// diff honest: no art -> byte-identical to the previous look.
+// diff honest: no art -> the previous look, role for role. (Value-identical rather than the same
+// ColorScheme instance, since the roles are read through the cross-fade either way - see tintedBy.)
 
 // Art is downsampled to roughly this before quantising - Palette's own cost scales with pixel
 // count and album art is routinely 1000px+ square, which is pure waste for picking one hue.
@@ -51,6 +52,10 @@ private const val TINT_ANIM_MS = 450
  * Keyed on the array instance: cover bytes are replaced wholesale per track and `ByteArray`
  * equality is identity, so a new cover restarts the effect and a re-emission of the same one
  * does not.
+ *
+ * `produceState` holds the previous value across a key change (its `remember` carries no keys), so
+ * a track change keeps the outgoing seed until the new one is quantised rather than blinking
+ * through null - which is what lets [tintedBy] cross-fade seed to seed instead of snapping.
  */
 @Composable
 internal fun rememberArtSeed(albumArt: ByteArray?): Color? {
@@ -96,9 +101,15 @@ private fun decodeDownsampled(bytes: ByteArray): Bitmap? {
  * Re-tints the accent and surface roles of this scheme towards [seed], then animates the result so
  * a track change cross-fades instead of snapping. Roles carrying text contrast (`onSurface`,
  * `onBackground`, `error*`) are left alone - the base scheme already guarantees them.
+ *
+ * A null [seed] (nothing playing, art-less track, or the setting switched off) targets the base
+ * scheme unchanged rather than bypassing this function. That matters: `animateColorAsState` seeds
+ * its animation at whatever the target is on first composition, so branching around the animation
+ * for null would make every start-of-art and end-of-art transition a hard cut. Kept in composition
+ * throughout, base -> seed and seed -> base cross-fade like seed -> seed already does.
  */
 @Composable
-internal fun ColorScheme.tintedBy(seed: Color, darkTheme: Boolean): ColorScheme = withSeed(seed, darkTheme).animated()
+internal fun ColorScheme.tintedBy(seed: Color?, darkTheme: Boolean): ColorScheme = (seed?.let { withSeed(it, darkTheme) } ?: this).animated()
 
 private fun ColorScheme.withSeed(seed: Color, dark: Boolean): ColorScheme {
     val hsl = seed.toHsl()
