@@ -41,8 +41,7 @@ fun TelecloudRadioTheme(
         darkTheme -> DarkColorScheme
         else -> LightColorScheme
     }
-    val artSeed = rememberArtSeed(albumArt)
-    val colorScheme = artSeed?.let { baseScheme.tintedBy(it, darkTheme) } ?: baseScheme
+    val colorScheme = baseScheme.tintedBy(rememberArtSeed(albumArt), darkTheme)
 
     MaterialTheme(
         colorScheme = colorScheme,
