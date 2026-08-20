@@ -1,14 +1,11 @@
 package tech.capullo.telecloudradio.ui.theme
 
-import android.os.Build
 import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.darkColorScheme
-import androidx.compose.material3.dynamicDarkColorScheme
-import androidx.compose.material3.dynamicLightColorScheme
 import androidx.compose.material3.lightColorScheme
 import androidx.compose.runtime.Composable
-import androidx.compose.ui.platform.LocalContext
+import tech.capullo.audio.ui.capulloColorScheme
 
 private val DarkColorScheme = darkColorScheme(
     primary = Purple80,
@@ -33,14 +30,12 @@ fun TelecloudRadioTheme(
     albumArt: ByteArray? = null,
     content: @Composable () -> Unit,
 ) {
-    val baseScheme = when {
-        dynamicColor && Build.VERSION.SDK_INT >= Build.VERSION_CODES.S -> {
-            val context = LocalContext.current
-            if (darkTheme) dynamicDarkColorScheme(context) else dynamicLightColorScheme(context)
-        }
-        darkTheme -> DarkColorScheme
-        else -> LightColorScheme
-    }
+    val baseScheme = capulloColorScheme(
+        darkTheme = darkTheme,
+        lightColors = LightColorScheme,
+        darkColors = DarkColorScheme,
+        dynamicColor = dynamicColor,
+    )
     val colorScheme = baseScheme.tintedBy(rememberArtSeed(albumArt), darkTheme)
 
     MaterialTheme(
