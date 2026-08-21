@@ -31,7 +31,6 @@ import androidx.compose.material3.Scaffold
 import androidx.compose.material3.SegmentedButton
 import androidx.compose.material3.SegmentedButtonDefaults
 import androidx.compose.material3.SingleChoiceSegmentedButtonRow
-import androidx.compose.material3.Slider
 import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
@@ -53,6 +52,8 @@ import androidx.lifecycle.viewModelScope
 import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.launch
+import tech.capullo.audio.ui.BalanceControls
+import tech.capullo.audio.ui.WebPlayerToggles
 import tech.capullo.telecloudradio.MiniPlayerHeight
 import tech.capullo.telecloudradio.data.SettingsRepository
 import tech.capullo.telecloudradio.data.ThemeMode
@@ -208,45 +209,8 @@ fun SettingsScreen(
             HorizontalDivider(modifier = Modifier.padding(vertical = 8.dp))
 
             Text("Balance", style = MaterialTheme.typography.titleMedium)
-            Text(
-                "Adjust left/right channel volume",
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-            )
             val balance by viewModel.balance.collectAsStateWithLifecycle()
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                verticalAlignment = androidx.compose.ui.Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(12.dp),
-            ) {
-                Text("L", style = MaterialTheme.typography.labelMedium)
-                Slider(
-                    value = balance,
-                    onValueChange = { viewModel.setBalance(it) },
-                    valueRange = -1f..1f,
-                    modifier = Modifier.weight(1f),
-                )
-                Text("R", style = MaterialTheme.typography.labelMedium)
-            }
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.SpaceBetween,
-                verticalAlignment = androidx.compose.ui.Alignment.CenterVertically,
-            ) {
-                Text(
-                    when {
-                        balance < -0.01f -> "Left ${(balance * -100).toInt()}%"
-                        balance > 0.01f -> "Right ${(balance * 100).toInt()}%"
-                        else -> "Centered"
-                    },
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
-                TextButton(
-                    onClick = { viewModel.setBalance(0f) },
-                    enabled = balance != 0f,
-                ) { Text("Center") }
-            }
+            BalanceControls(value = balance, onValueChange = viewModel::setBalance)
 
             HorizontalDivider(modifier = Modifier.padding(vertical = 8.dp))
 
@@ -269,39 +233,13 @@ fun SettingsScreen(
 
             Text("Web player", style = MaterialTheme.typography.titleMedium)
             val webAutoplay by viewModel.webAutoplay.collectAsStateWithLifecycle()
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.SpaceBetween,
-                verticalAlignment = androidx.compose.ui.Alignment.CenterVertically,
-            ) {
-                Column(modifier = Modifier.weight(1f)) {
-                    Text("Autostart listening", style = MaterialTheme.typography.bodyMedium)
-                    Text(
-                        "Web clients start listening on page load instead of waiting for the " +
-                            "headphones button. Browsers may still require one tap the first " +
-                            "time. Applies on the page's next reload.",
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    )
-                }
-                Switch(checked = webAutoplay, onCheckedChange = viewModel::setWebAutoplay)
-            }
             val webDebugPanel by viewModel.webDebugPanel.collectAsStateWithLifecycle()
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.SpaceBetween,
-                verticalAlignment = androidx.compose.ui.Alignment.CenterVertically,
-            ) {
-                Column(modifier = Modifier.weight(1f)) {
-                    Text("Debug panel", style = MaterialTheme.typography.bodyMedium)
-                    Text(
-                        "Show the audio debug bar in the web player. Applies on the page's next reload.",
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    )
-                }
-                Switch(checked = webDebugPanel, onCheckedChange = viewModel::setWebDebugPanel)
-            }
+            WebPlayerToggles(
+                autostart = webAutoplay,
+                onAutostartChange = viewModel::setWebAutoplay,
+                debugPanel = webDebugPanel,
+                onDebugPanelChange = viewModel::setWebDebugPanel,
+            )
 
             HorizontalDivider(modifier = Modifier.padding(vertical = 8.dp))
 
