@@ -127,6 +127,9 @@ class SettingsViewModel @Inject constructor(
     val webAutoplay: StateFlow<Boolean> = settings.webAutoplay
     fun setWebAutoplay(value: Boolean) = settings.setWebAutoplay(value)
 
+    val tunnelEnabled: StateFlow<Boolean> = settings.tunnelEnabled
+    fun setTunnelEnabled(value: Boolean) = settings.setTunnelEnabled(value)
+
     val customServerName: StateFlow<String> = settings.customServerName
     fun setCustomServerName(value: String) = settings.setCustomServerName(value)
 }
@@ -247,6 +250,24 @@ fun SettingsScreen(
                 debugPanel = webDebugPanel,
                 onDebugPanelChange = viewModel::setWebDebugPanel,
             )
+            val tunnelEnabled by viewModel.tunnelEnabled.collectAsStateWithLifecycle()
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = androidx.compose.ui.Alignment.CenterVertically,
+            ) {
+                Column(modifier = Modifier.weight(1f)) {
+                    Text("Public link", style = MaterialTheme.typography.bodyMedium)
+                    Text(
+                        "Expose the web player on the internet via a tunnel while broadcasting " +
+                            "(link shows in the player). Anyone with the link can listen and " +
+                            "control; ~1.4 Mbps upload per listener.",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
+                Switch(checked = tunnelEnabled, onCheckedChange = viewModel::setTunnelEnabled)
+            }
 
             HorizontalDivider(modifier = Modifier.padding(vertical = 8.dp))
 
