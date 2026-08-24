@@ -217,11 +217,7 @@ fun SettingsScreen(
 
             SectionHeader("Balance")
             val balance by viewModel.balance.collectAsStateWithLifecycle()
-            BalanceControls(
-                value = balance,
-                onValueChange = viewModel::setBalance,
-                horizontalPadding = 16.dp,
-            )
+            BalanceControls(value = balance, onValueChange = viewModel::setBalance)
 
             HorizontalDivider(modifier = Modifier.padding(vertical = 8.dp))
 
@@ -250,7 +246,6 @@ fun SettingsScreen(
                 onAutostartChange = viewModel::setWebAutoplay,
                 debugPanel = webDebugPanel,
                 onDebugPanelChange = viewModel::setWebDebugPanel,
-                horizontalPadding = 16.dp,
             )
 
             HorizontalDivider(modifier = Modifier.padding(vertical = 8.dp))
