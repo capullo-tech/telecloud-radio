@@ -154,10 +154,11 @@ fun SettingsScreen(
                 .fillMaxSize()
                 .padding(padding)
                 .verticalScroll(rememberScrollState())
-                .padding(horizontal = 20.dp, vertical = 16.dp)
+                // Every row supplies its own 16dp inset, matching QuantumCast, so the
+                // container adds none and the dividers stay full-bleed.
+                .padding(vertical = 8.dp)
                 // Keep the last section clear of the mini-player overlay
                 .padding(bottom = MiniPlayerHeight),
-            verticalArrangement = Arrangement.spacedBy(8.dp),
         ) {
             val serverName by viewModel.customServerName.collectAsStateWithLifecycle()
             ServerNameRow(
@@ -172,14 +173,18 @@ fun SettingsScreen(
 
             HorizontalDivider(modifier = Modifier.padding(vertical = 8.dp))
 
-            Text("Appearance", style = MaterialTheme.typography.titleMedium)
+            SectionHeader("Appearance")
             val themeMode by viewModel.themeMode.collectAsStateWithLifecycle()
             val themeOptions = listOf(
                 ThemeMode.SYSTEM to "System",
                 ThemeMode.LIGHT to "Light",
                 ThemeMode.DARK to "Dark",
             )
-            SingleChoiceSegmentedButtonRow(modifier = Modifier.fillMaxWidth()) {
+            SingleChoiceSegmentedButtonRow(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 16.dp, vertical = 8.dp),
+            ) {
                 themeOptions.forEachIndexed { index, (mode, label) ->
                     SegmentedButton(
                         selected = themeMode == mode,
@@ -190,7 +195,9 @@ fun SettingsScreen(
             }
             val artTheme by viewModel.artTheme.collectAsStateWithLifecycle()
             Row(
-                modifier = Modifier.fillMaxWidth(),
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 16.dp, vertical = 8.dp),
                 horizontalArrangement = Arrangement.SpaceBetween,
                 verticalAlignment = androidx.compose.ui.Alignment.CenterVertically,
             ) {
@@ -208,7 +215,7 @@ fun SettingsScreen(
 
             HorizontalDivider(modifier = Modifier.padding(vertical = 8.dp))
 
-            Text("Balance", style = MaterialTheme.typography.titleMedium)
+            SectionHeader("Balance")
             val balance by viewModel.balance.collectAsStateWithLifecycle()
             BalanceControls(value = balance, onValueChange = viewModel::setBalance)
 
@@ -231,7 +238,7 @@ fun SettingsScreen(
 
             HorizontalDivider(modifier = Modifier.padding(vertical = 8.dp))
 
-            Text("Web player", style = MaterialTheme.typography.titleMedium)
+            SectionHeader("Web player")
             val webAutoplay by viewModel.webAutoplay.collectAsStateWithLifecycle()
             val webDebugPanel by viewModel.webDebugPanel.collectAsStateWithLifecycle()
             WebPlayerToggles(
@@ -285,9 +292,11 @@ fun SettingsScreen(
 
             HorizontalDivider(modifier = Modifier.padding(vertical = 8.dp))
 
-            Text("Navigation", style = MaterialTheme.typography.titleMedium)
+            SectionHeader("Navigation")
             Row(
-                modifier = Modifier.fillMaxWidth(),
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 16.dp, vertical = 8.dp),
                 horizontalArrangement = Arrangement.SpaceBetween,
                 verticalAlignment = androidx.compose.ui.Alignment.CenterVertically,
             ) {
@@ -311,24 +320,31 @@ fun SettingsScreen(
 
             HorizontalDivider(modifier = Modifier.padding(vertical = 8.dp))
 
-            Text("Library", style = MaterialTheme.typography.titleMedium)
-            Text(
-                "Rebuild deletes the local track index and all downloaded files, then " +
-                    "re-syncs the full chat history on the next station open - including " +
-                    "audio sent as file attachments that older versions missed. " +
-                    "Nothing on Telegram is affected.",
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-            )
+            SectionHeader("Library")
             var showRebuildDialog by remember { mutableStateOf(false) }
-            OutlinedButton(
-                onClick = {
-                    viewModel.loadStations()
-                    showRebuildDialog = true
-                },
-                enabled = !viewModel.rebuildDone,
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 16.dp, vertical = 8.dp),
+                verticalArrangement = Arrangement.spacedBy(8.dp),
             ) {
-                Text(if (viewModel.rebuildDone) "Library cleared · reopen a station" else "Rebuild library")
+                Text(
+                    "Rebuild deletes the local track index and all downloaded files, then " +
+                        "re-syncs the full chat history on the next station open - including " +
+                        "audio sent as file attachments that older versions missed. " +
+                        "Nothing on Telegram is affected.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+                OutlinedButton(
+                    onClick = {
+                        viewModel.loadStations()
+                        showRebuildDialog = true
+                    },
+                    enabled = !viewModel.rebuildDone,
+                ) {
+                    Text(if (viewModel.rebuildDone) "Library cleared · reopen a station" else "Rebuild library")
+                }
             }
             if (showRebuildDialog) {
                 AlertDialog(
@@ -363,6 +379,17 @@ fun SettingsScreen(
             }
         }
     }
+}
+
+// Section label. Carries its own 16dp inset because the scroll container supplies none - every
+// row self-pads, matching QuantumCast, which keeps the dividers full-bleed in both apps.
+@Composable
+private fun SectionHeader(title: String) {
+    Text(
+        text = title,
+        style = MaterialTheme.typography.titleMedium,
+        modifier = Modifier.padding(horizontal = 16.dp, vertical = 4.dp),
+    )
 }
 
 // A section label with a small (i) that reveals the full explanation in a dialog, so the
@@ -405,7 +432,7 @@ private fun ServerNameRow(
 ) {
     var text by remember(value) { mutableStateOf(value) }
     Column(
-        modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp),
+        modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 8.dp),
         verticalArrangement = Arrangement.spacedBy(4.dp),
     ) {
         LabelWithInfo(title, info)
@@ -452,7 +479,7 @@ private fun IntStepperRow(
         )
     }
     Row(
-        modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp),
+        modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 8.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
         LabelWithInfo(title, info, modifier = Modifier.weight(1f))
