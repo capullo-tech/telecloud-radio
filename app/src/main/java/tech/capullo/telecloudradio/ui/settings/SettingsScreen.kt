@@ -252,7 +252,9 @@ fun SettingsScreen(
             )
             val tunnelEnabled by viewModel.tunnelEnabled.collectAsStateWithLifecycle()
             Row(
-                modifier = Modifier.fillMaxWidth(),
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 16.dp, vertical = 8.dp),
                 horizontalArrangement = Arrangement.SpaceBetween,
                 verticalAlignment = androidx.compose.ui.Alignment.CenterVertically,
             ) {
