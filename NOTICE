@@ -31,3 +31,10 @@ jaudiotagger (https://www.jthink.net/jaudiotagger/)
   Copyright Paul Taylor and contributors
   Licensed under the GNU Lesser General Public License.
   Used to read audio file metadata.
+
+cloudflared (https://github.com/cloudflare/cloudflared)
+  Copyright Cloudflare, Inc.
+  Licensed under the Apache License 2.0.
+  Bundled as a native binary (a GOOS=android build by the Termux project,
+  fetched at build time, version + sha256 pinned) to expose the built-in web
+  player via Cloudflare quick tunnels.

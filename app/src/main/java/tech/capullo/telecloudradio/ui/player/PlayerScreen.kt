@@ -162,12 +162,14 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import tech.capullo.audio.snapcast.SnapclientProcess
 import tech.capullo.audio.snapcast.firstArtist
+import tech.capullo.audio.ui.PublicLinkState
 import tech.capullo.audio.ui.SnapcastControlSheet
 import tech.capullo.telecloudradio.LISTEN_IN_CHAT_ID
 import tech.capullo.telecloudradio.data.db.AudioAnalysisEntity
 import tech.capullo.telecloudradio.data.db.MediaMessageEntity
 import tech.capullo.telecloudradio.player.AudioMetadata
 import tech.capullo.telecloudradio.snapcast.SnapcastManager
+import tech.capullo.telecloudradio.tunnel.TunnelManager.TunnelState
 import tech.capullo.telecloudradio.ui.snapcast.SnapcastViewModel
 import tech.capullo.telecloudradio.util.PerfTrace
 import java.io.File
@@ -206,6 +208,8 @@ fun PlayerScreen(
     val listenIn = chatId == LISTEN_IN_CHAT_ID || snapState.isListening
 
     var showSnapSheet by remember { mutableStateOf(false) }
+    // Public-link (tunnel) state: forwarded to the snapcast sheet's QR dialog ("Public link" segment).
+    val tunnelState by snapViewModel.tunnelState.collectAsStateWithLifecycle()
     // Blur the screen content behind the snapcast sheet, matching the web player's
     // `backdrop-filter: blur` overlay (the sheet is a separate window and stays sharp;
     // it darkens the backdrop via its own scrim).
@@ -231,6 +235,7 @@ fun PlayerScreen(
             onResetSelf = snapViewModel::resetSelf,
             onResetAll = snapViewModel::resetAll,
             httpPort = snapState.broadcastHttpPort,
+            publicLink = tunnelState.toPublicLinkState(),
             onDismiss = { showSnapSheet = false },
         )
     }
@@ -2076,4 +2081,12 @@ private fun formatDuration(seconds: Int): String {
     val m = seconds / 60
     val s = seconds % 60
     return "%02d:%02d".format(m, s)
+}
+
+// Maps the app's tunnel state machine onto the library's public-link model for the sheet's QR dialog.
+private fun TunnelState.toPublicLinkState() = when (this) {
+    is TunnelState.Active -> PublicLinkState.Active(publicUrl)
+    TunnelState.Starting -> PublicLinkState.Starting
+    is TunnelState.Error -> PublicLinkState.Error(message)
+    TunnelState.Off -> PublicLinkState.Off
 }

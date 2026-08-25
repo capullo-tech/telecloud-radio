@@ -64,6 +64,16 @@ class SettingsRepository @Inject constructor(@ApplicationContext context: Contex
         _webAutoplay.value = value
     }
 
+    // Public-link tunnel (SSH remote-forward of the snapserver HTTP port) - a flow so
+    // PlaybackService starts/stops the tunnel live with the broadcast state.
+    private val _tunnelEnabled = MutableStateFlow(prefs.getBoolean("tunnel_enabled", false))
+    val tunnelEnabled: StateFlow<Boolean> = _tunnelEnabled.asStateFlow()
+
+    fun setTunnelEnabled(value: Boolean) {
+        prefs.edit().putBoolean("tunnel_enabled", value).apply()
+        _tunnelEnabled.value = value
+    }
+
     var lastGroupId: Long
         get() = prefs.getLong("last_group_id", -1L)
         set(value) {

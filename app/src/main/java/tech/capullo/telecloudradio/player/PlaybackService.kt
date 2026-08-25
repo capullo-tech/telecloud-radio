@@ -70,6 +70,8 @@ class PlaybackService : MediaSessionService() {
 
     @Inject lateinit var snapcastManager: SnapcastManager
 
+    @Inject lateinit var tunnelManager: tech.capullo.telecloudradio.tunnel.TunnelManager
+
     private var mediaSession: MediaSession? = null
     private val balanceProcessor = BalanceAudioProcessor()
     private var fifoSink: FifoAudioBufferSink? = null
@@ -272,6 +274,20 @@ class PlaybackService : MediaSessionService() {
                 debug to autoplay
             }.distinctUntilChanged().collect { (debug, autoplay) ->
                 snapcastManager.updateWebConfig(debug, autoplay)
+            }
+        }
+        // Public-link tunnel: runs only while the broadcast stack (and thus the web player's
+        // HTTP port) is live and the setting is on. The tunnel survives listen-in teardown of
+        // the snapclient because isBroadcasting is what matters here.
+        serviceScope.launch {
+            combine(settings.tunnelEnabled, snapcastManager.state) { enabled, s ->
+                enabled to s
+            }.collect { (enabled, s) ->
+                if (enabled && s.isBroadcasting) {
+                    tunnelManager.start(s.broadcastHttpPort)
+                } else {
+                    tunnelManager.stop()
+                }
             }
         }
         val player = ExoPlayer.Builder(this, renderersFactory)
