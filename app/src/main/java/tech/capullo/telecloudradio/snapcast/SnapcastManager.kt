@@ -35,6 +35,7 @@ import tech.capullo.audio.snapcast.SnapserverProcess
 import tech.capullo.audio.snapcast.StreamOnProperties
 import tech.capullo.audio.snapcast.StreamPlayerProperties
 import tech.capullo.audio.snapcast.Volume
+import tech.capullo.audio.snapcast.withoutReferenceTaps
 import tech.capullo.telecloudradio.data.SettingsRepository
 import javax.inject.Inject
 import javax.inject.Singleton
@@ -565,7 +566,10 @@ class SnapcastManager @Inject constructor(
     }
 
     private suspend fun applyServer(result: ServerStatusResult) {
-        val groups = result.server.groups
+        // A calibration reference tap is a connected client but not a speaker. Dropping it here,
+        // where every status funnels through, keeps it out of the control sheet, the device count
+        // and reset-all at once.
+        val groups = result.server.groups.withoutReferenceTaps()
         _state.update {
             it.copy(
                 groups = groups,
