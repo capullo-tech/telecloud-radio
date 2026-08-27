@@ -1,22 +1,4 @@
 import com.android.build.api.artifact.SingleArtifact
-import org.apache.commons.compress.archivers.ar.ArArchiveInputStream
-import org.apache.commons.compress.archivers.tar.TarArchiveInputStream
-import org.apache.commons.compress.compressors.xz.XZCompressorInputStream
-import java.net.URI
-import java.security.MessageDigest
-
-// Build-time-only deps for the fetchCloudflared task: a .deb is an ar archive holding
-// data.tar.xz, and unpacking must work identically on the Windows release host too (no
-// shelling out to ar/tar), so it's done in pure JVM with commons-compress + xz.
-buildscript {
-    repositories {
-        mavenCentral()
-    }
-    dependencies {
-        classpath("org.apache.commons:commons-compress:1.27.1")
-        classpath("org.tukaani:xz:1.10")
-    }
-}
 
 plugins {
     alias(libs.plugins.android.application)
@@ -93,13 +75,6 @@ android {
     buildFeatures {
         compose = true
     }
-    // cloudflared lands in jniLibs as libcloudflared.so (see fetchCloudflared below) and is
-    // exec'd from nativeLibraryDir - the same mechanism the engine uses for snapserver.
-    sourceSets {
-        getByName("main") {
-            jniLibs.srcDir(layout.buildDirectory.dir("cloudflared-jnilibs").get().asFile)
-        }
-    }
     packaging {
         resources {
             excludes += "/META-INF/{AL2.0,LGPL2.1}"
@@ -139,75 +114,6 @@ androidComponents {
         afterEvaluate { tasks.named("assemble$cap").configure { finalizedBy(copyNamedApk) } }
     }
 }
-
-// cloudflared (Cloudflare quick tunnel) powers the public-link feature. Stock cloudflared
-// builds are static Go binaries whose pure-Go resolver needs /etc/resolv.conf (absent on
-// Android → no DNS); Termux's package is a GOOS=android (bionic) build of the same
-// Apache-2.0 sources, verified working on-device. Pinned by version + per-ABI sha256 -
-// bump deliberately. Follow-up before release: own lib-cloudflared-android build repo.
-val cloudflaredVersion = "2026.8.2"
-val cloudflaredAbis = mapOf(
-    "arm64-v8a" to ("aarch64" to "7ecda51a05326f34a832be6e763eb7c6f71edf4ad49f096b291fa6f8ec5a5377"),
-    "armeabi-v7a" to ("arm" to "d2177a6b0724885842d3ec56176aef08ceb7b2ab9d43465054e710d41a583cc9"),
-    "x86" to ("i686" to "9e63f8f5dc24c4d31fa4bc9f8ef5cf02bf072c6e1243d0538a34a8f18688fc4f"),
-    "x86_64" to ("x86_64" to "33a0d6e69fbc738b98de03d51e3de7bf5de1b28e0b6501ed6cba0cc74ab8cd0e"),
-)
-
-val fetchCloudflared = tasks.register("fetchCloudflared") {
-    val debDir = layout.buildDirectory.dir("cloudflared/deb")
-    val jniDir = layout.buildDirectory.dir("cloudflared-jnilibs")
-    inputs.property("version", cloudflaredVersion)
-    inputs.property("abis", cloudflaredAbis)
-    outputs.dir(jniDir)
-    doLast {
-        cloudflaredAbis.forEach { (abi, archAndSha) ->
-            val (termuxArch, sha256) = archAndSha
-            val deb = debDir.get().asFile.resolve("cloudflared-$cloudflaredVersion-$termuxArch.deb")
-            if (!deb.exists()) {
-                deb.parentFile.mkdirs()
-                val url = "https://packages.termux.dev/apt/termux-main/pool/main/c/cloudflared/" +
-                    "cloudflared_${cloudflaredVersion}_$termuxArch.deb"
-                URI(url).toURL().openStream().use { input ->
-                    deb.outputStream().use { input.copyTo(it) }
-                }
-            }
-            val digest = MessageDigest.getInstance("SHA-256")
-            deb.inputStream().use { input ->
-                val buf = ByteArray(1 shl 16)
-                while (true) {
-                    val n = input.read(buf)
-                    if (n < 0) break
-                    digest.update(buf, 0, n)
-                }
-            }
-            val actual = digest.digest().joinToString("") { "%02x".format(it) }
-            if (actual != sha256) {
-                deb.delete()
-                throw GradleException(
-                    "cloudflared $termuxArch sha256 mismatch: $actual (expected $sha256) - refusing to package",
-                )
-            }
-            // .deb = ar archive containing data.tar.xz; pull usr/bin/cloudflared out of it.
-            ArArchiveInputStream(deb.inputStream().buffered()).use { ar ->
-                generateSequence { ar.nextEntry }
-                    .firstOrNull { it.name.startsWith("data.tar") }
-                    ?: throw GradleException("data.tar missing in $deb")
-                // ar is now positioned at the data.tar.xz payload.
-                TarArchiveInputStream(XZCompressorInputStream(ar, true)).use { tar ->
-                    generateSequence { tar.nextEntry }
-                        .firstOrNull { it.name.endsWith("usr/bin/cloudflared") }
-                        ?: throw GradleException("cloudflared binary missing in $deb")
-                    val out = jniDir.get().asFile.resolve("$abi/libcloudflared.so")
-                    out.parentFile.mkdirs()
-                    out.outputStream().use { tar.copyTo(it) }
-                    out.setExecutable(true)
-                }
-            }
-        }
-    }
-}
-
-tasks.named("preBuild") { dependsOn(fetchCloudflared) }
 
 dependencies {
     // Telegram source: brings lib-tdlib-android (libtdjni.so + org.drinkless.tdlib)
@@ -254,6 +160,9 @@ dependencies {
     // conflict and could package a stale .so (green build, dead control plane). QC does the same.
     implementation(pins.capullo.audio)
     implementation(pins.capullo.audio.ui) // shared control sheet + QR dialog
+    // Public-link tunnel: TunnelManager + the cloudflared .so per ABI, carried by the AAR. Opt-in,
+    // hence a separate coordinate: it costs ~8 MB per ABI and an app is free not to have a tunnel.
+    implementation(pins.capullo.tunnel)
 
     // ktor WebSocket client for the Snapcast JSON-RPC control API
     implementation(libs.ktor.client.okhttp)

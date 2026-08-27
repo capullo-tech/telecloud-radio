@@ -30,6 +30,8 @@ mockk = "1.14.6"
 # nested = duplicate classes).
 capullo-audio = { module = "com.github.capullo-tech.capullo-audio:capullo-audio", version.ref = "capulloAudio" }
 capullo-audio-ui = { module = "com.github.capullo-tech.capullo-audio:capullo-audio-ui", version.ref = "capulloAudio" }
+# Same repo, same commit, same nested group - one pin covers all three modules.
+capullo-tunnel = { module = "com.github.capullo-tech.capullo-audio:capullo-tunnel", version.ref = "capulloAudio" }
 capullo-source-telegram = { module = "com.github.capullo-tech:capullo-source-telegram", version.ref = "capulloSourceTelegram" }
 # Compose outside the BOM (TC-specific versions).
 androidx-material3 = { group = "androidx.compose.material3", name = "material3", version.ref = "material3" }
