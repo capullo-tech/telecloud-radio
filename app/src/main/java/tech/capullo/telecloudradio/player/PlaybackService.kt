@@ -166,9 +166,17 @@ class PlaybackService : MediaSessionService() {
      * Start a calibration from an Intent, because nothing outside this process holds the service
      * object: the app talks to it through a MediaController, which carries transport commands only.
      * MainActivity's `dbg calibrate` hook sends [ACTION_CALIBRATE] here.
+     *
+     * Returning WITHOUT delegating to super for our own action is deliberate and was found the hard
+     * way: MediaSessionService.onStartCommand re-runs its own start path, which on this service
+     * tears the broadcast down and builds a NEW FIFO - destroying the very reference PCM the
+     * calibration is about to measure. Only foreign intents (media-button, restart) go to super.
      */
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
-        if (intent?.action == ACTION_CALIBRATE) startSyncCalibration()
+        if (intent?.action == ACTION_CALIBRATE) {
+            startSyncCalibration()
+            return START_STICKY
+        }
         return super.onStartCommand(intent, flags, startId)
     }
 
