@@ -37,6 +37,8 @@ if (file("../capullo-audio").exists()) {
                 .using(project(":capullo-audio"))
             substitute(module("com.github.capullo-tech.capullo-audio:capullo-audio-ui"))
                 .using(project(":capullo-audio-ui"))
+            substitute(module("com.github.capullo-tech.capullo-audio:capullo-tunnel"))
+                .using(project(":capullo-tunnel"))
         }
     }
 }

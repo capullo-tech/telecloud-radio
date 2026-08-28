@@ -7,6 +7,7 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.launch
 import tech.capullo.audio.snapcast.DiscoveredSnapserver
 import tech.capullo.audio.snapcast.SnapserverListenInfo
+import tech.capullo.audio.tunnel.TunnelManager
 import tech.capullo.telecloudradio.snapcast.SnapcastManager
 import tech.capullo.telecloudradio.snapcast.SnapcastPorts
 import javax.inject.Inject
@@ -14,12 +15,12 @@ import javax.inject.Inject
 @HiltViewModel
 class SnapcastViewModel @Inject constructor(
     private val snapcastManager: SnapcastManager,
-    tunnelManager: tech.capullo.telecloudradio.tunnel.TunnelManager,
+    tunnelManager: TunnelManager,
 ) : ViewModel() {
 
     val state: StateFlow<SnapcastManager.SnapcastState> = snapcastManager.state
     val discoveredServers: StateFlow<List<DiscoveredSnapserver>> = snapcastManager.discovery.discoveredServers
-    val tunnelState: StateFlow<tech.capullo.telecloudradio.tunnel.TunnelManager.TunnelState> = tunnelManager.state
+    val tunnelState: StateFlow<TunnelManager.TunnelState> = tunnelManager.state
     val localClientId: String get() = snapcastManager.localClientId
 
     fun startDiscovery() = snapcastManager.discovery.startDiscovery()

@@ -43,6 +43,7 @@ import tech.capullo.audio.contracts.PlaybackController
 import tech.capullo.audio.player.BalanceAudioProcessor
 import tech.capullo.audio.player.FifoAudioBufferSink
 import tech.capullo.audio.snapcast.firstArtist
+import tech.capullo.audio.tunnel.TunnelManager
 import tech.capullo.telecloudradio.MainActivity
 import tech.capullo.telecloudradio.data.SettingsRepository
 import tech.capullo.telecloudradio.data.playlist.ActiveTrackRepository
@@ -70,7 +71,7 @@ class PlaybackService : MediaSessionService() {
 
     @Inject lateinit var snapcastManager: SnapcastManager
 
-    @Inject lateinit var tunnelManager: tech.capullo.telecloudradio.tunnel.TunnelManager
+    @Inject lateinit var tunnelManager: TunnelManager
 
     private var mediaSession: MediaSession? = null
     private val balanceProcessor = BalanceAudioProcessor()
