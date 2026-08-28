@@ -80,6 +80,22 @@ class SettingsRepository @Inject constructor(@ApplicationContext context: Contex
             prefs.edit().putLong("last_group_id", value).apply()
         }
 
+    // Where to post the public-link announcement when a broadcast's tunnel comes up
+    // (PlaybackService reads these at send time, so plain prefs suffice - no flow). 0 = off;
+    // TDLib chat ids are never 0 (channels/supergroups are negative). The title is only the
+    // dropdown's display label - the id is the source of truth.
+    var broadcastNotifyChatId: Long
+        get() = prefs.getLong("broadcast_notify_chat_id", 0L)
+        set(value) {
+            prefs.edit().putLong("broadcast_notify_chat_id", value).apply()
+        }
+
+    var broadcastNotifyChatTitle: String
+        get() = prefs.getString("broadcast_notify_chat_title", "") ?: ""
+        set(value) {
+            prefs.edit().putString("broadcast_notify_chat_title", value).apply()
+        }
+
     var lastGroupTitle: String
         get() = prefs.getString("last_group_title", "") ?: ""
         set(value) {

@@ -51,6 +51,7 @@ import tech.capullo.audio.player.BalanceAudioProcessor
 import tech.capullo.audio.player.FifoAudioBufferSink
 import tech.capullo.audio.snapcast.firstArtist
 import tech.capullo.audio.tunnel.TunnelManager
+import tech.capullo.source.telegram.data.telegram.TelegramException
 import tech.capullo.telecloudradio.MainActivity
 import tech.capullo.telecloudradio.data.SettingsRepository
 import tech.capullo.telecloudradio.data.playlist.ActiveTrackRepository
@@ -79,6 +80,8 @@ class PlaybackService : MediaSessionService() {
     @Inject lateinit var snapcastManager: SnapcastManager
 
     @Inject lateinit var tunnelManager: TunnelManager
+
+    @Inject lateinit var telegramRepository: tech.capullo.telecloudradio.data.telegram.TelegramRepository
 
     private var mediaSession: MediaSession? = null
     private val balanceProcessor = BalanceAudioProcessor()
@@ -282,6 +285,45 @@ class PlaybackService : MediaSessionService() {
         if (Looper.myLooper() == Looper.getMainLooper()) block() else mainHandler.post(block)
     }
 
+    // Posts the tunnel's public URL to the user-configured Telegram chat (Settings → Web player →
+    // "Announce public link in Telegram"); 0 = not configured. Every outcome surfaces as a
+    // player-screen snackbar (and a log line) - success names the channel, an unset channel and
+    // the no-admin-rights failure say so explicitly. Whatever happens, the broadcast itself is
+    // never disturbed by the announcement.
+    private suspend fun announcePublicLink(url: String) {
+        val chatId = settings.broadcastNotifyChatId
+        if (chatId == 0L) {
+            Log.d(TAG, "Public link up, no announce channel configured")
+            activeTrackRepository.emitMessage(
+                "Public link is up, but no Telegram channel is set for announcements - " +
+                    "pick one in Settings › Web player",
+            )
+            return
+        }
+        val channel = settings.broadcastNotifyChatTitle.ifBlank { "the selected channel" }
+        val station = activeTrackRepository.activePlayback.value?.chatTitle
+            ?.takeIf { it.isNotBlank() }
+            ?: "Telecloud Radio"
+        val text = "🎙️ $station is live!\n🎧 Listen from anywhere: $url"
+        runCatching { telegramRepository.sendMessage(chatId, text) }
+            .onSuccess {
+                Log.d(TAG, "Announced public link in chat $chatId")
+                activeTrackRepository.emitMessage("Public link posted to $channel")
+            }
+            .onFailure {
+                Log.w(TAG, "Public-link announcement to chat $chatId failed: ${it.message}")
+                val noRights = it is TelegramException &&
+                    it.message.contains("administrator rights", ignoreCase = true)
+                activeTrackRepository.emitMessage(
+                    if (noRights) {
+                        "No permission to post in $channel - make the app account a channel admin"
+                    } else {
+                        "Couldn't post the public link to $channel: ${it.message ?: "unknown error"}"
+                    },
+                )
+            }
+    }
+
     // Invoked (on the audio processing thread) by [SilenceWatchdogSink] when the current track has
     // decoded to sustained digital silence - a track that "plays" (timer advancing) but is inaudible,
     // typically a corrupt file the decoder can't parse yet doesn't error on. Warn the user and skip to
@@ -411,6 +453,16 @@ class PlaybackService : MediaSessionService() {
                     tunnelManager.stop()
                 }
             }
+        }
+        // Announce the public link in the configured Telegram chat each time a NEW url comes up.
+        // Quick tunnels get a fresh random URL per connection, so distinctUntilChanged on the url
+        // both dedupes repeats of the same link and intentionally re-announces after a reconnect
+        // (the old link is dead by then).
+        serviceScope.launch {
+            tunnelManager.state
+                .map { (it as? TunnelManager.TunnelState.Active)?.publicUrl }
+                .distinctUntilChanged()
+                .collect { url -> if (url != null) announcePublicLink(url) }
         }
         val player = ExoPlayer.Builder(this, renderersFactory)
             .setAudioAttributes(
