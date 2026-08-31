@@ -31,7 +31,9 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
+import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.combine
@@ -311,6 +313,10 @@ class PlaybackService : MediaSessionService() {
                 activeTrackRepository.emitMessage("Public link posted to $channel")
             }
             .onFailure {
+                // runCatching traps CancellationException too: tearing the service down while
+                // sendMessage is suspended must propagate the cancel, not raise a failure
+                // snackbar for a normal shutdown.
+                currentCoroutineContext().ensureActive()
                 Log.w(TAG, "Public-link announcement to chat $chatId failed: ${it.message}")
                 val noRights = it is TelegramException &&
                     it.message.contains("administrator rights", ignoreCase = true)
@@ -454,15 +460,27 @@ class PlaybackService : MediaSessionService() {
                 }
             }
         }
-        // Announce the public link in the configured Telegram chat each time a NEW url comes up.
-        // Quick tunnels get a fresh random URL per connection, so distinctUntilChanged on the url
-        // both dedupes repeats of the same link and intentionally re-announces after a reconnect
-        // (the old link is dead by then).
+        // Announce the public link in the configured Telegram chat each time THIS collector
+        // observes a tunnel connecting, i.e. a Starting → Active transition. Gating on the
+        // transition rather than distinctUntilChanged-on-the-url matters because TunnelManager is
+        // a singleton that outlives this service: a fresh collector attaching to a retained
+        // Active(oldUrl) from a previous broadcast would announce a link whose snapserver port
+        // stopBroadcast() already tore down (drop(1) can't fix that either - the first emission
+        // can just as well be a legitimate Active after a fast handshake). Reconnects still
+        // re-announce: quick tunnels mint a fresh URL per connection, so the earlier post is dead
+        // by then. Only a reconnect handing back the SAME url is skipped - the earlier post is
+        // live again, and a second one would be noise (lastAnnouncedUrl lives in the companion
+        // precisely so it survives service recreation within the process, like TunnelManager).
         serviceScope.launch {
-            tunnelManager.state
-                .map { (it as? TunnelManager.TunnelState.Active)?.publicUrl }
-                .distinctUntilChanged()
-                .collect { url -> if (url != null) announcePublicLink(url) }
+            var previous: TunnelManager.TunnelState? = null
+            tunnelManager.state.collect { state ->
+                val url = (state as? TunnelManager.TunnelState.Active)?.publicUrl
+                if (url != null && previous == TunnelManager.TunnelState.Starting && url != lastAnnouncedUrl) {
+                    lastAnnouncedUrl = url
+                    announcePublicLink(url)
+                }
+                previous = state
+            }
         }
         val player = ExoPlayer.Builder(this, renderersFactory)
             .setAudioAttributes(
@@ -666,6 +684,11 @@ class PlaybackService : MediaSessionService() {
         const val ACTION_CALIBRATE = "tech.capullo.telecloudradio.CALIBRATE"
 
         private const val TAG = "PlaybackService"
+
+        // Last public URL this process announced in Telegram. Companion-level on purpose: it
+        // must outlive service recreation just like the singleton TunnelManager does, so a
+        // reconnect handing back an already-announced url doesn't double-post.
+        var lastAnnouncedUrl: String? = null
 
         // Silence watchdog: how often it polls, and how long a playing track may go without any
         // audible PCM before it's judged undecodable and skipped. 8s comfortably clears normal
