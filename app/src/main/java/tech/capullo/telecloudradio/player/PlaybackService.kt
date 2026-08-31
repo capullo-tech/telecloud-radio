@@ -663,6 +663,11 @@ class PlaybackService : MediaSessionService() {
         activeTrackRepository.clear()
         snapcastManager.stopBroadcast()
         snapcastManager.disconnectListen()
+        // The scope above is already cancelled, so the tunnel start/stop collector - the only
+        // other stop() caller - can't do this: TunnelManager is a singleton, and without an
+        // explicit stop here cloudflared (and its retained Active(publicUrl)) would outlive the
+        // service, orphaned against a snapserver port that stopBroadcast() just tore down.
+        tunnelManager.stop()
         fifoSink?.close()
         fifoSink = null
         mediaSession?.release()
