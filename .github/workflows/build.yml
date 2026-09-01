@@ -14,6 +14,10 @@ permissions:
 jobs:
   build:
     runs-on: ubuntu-latest
+    # Defined once so the verify step below checks exactly what the upload step publishes. Keep it a
+    # plain glob (no **): bash has to expand it too.
+    env:
+      UPLOAD_GLOB: app/build/outputs/apk-named/release/*.apk
     steps:
       - name: Checkout project sources
         uses: actions/checkout@v4
@@ -45,8 +49,83 @@ jobs:
           RELEASE_KEY_ALIAS: ${{ secrets.RELEASE_KEY_ALIAS }}
           RELEASE_KEY_PASSWORD: ${{ secrets.RELEASE_KEY_PASSWORD }}
         run: ./gradlew :app:assembleRelease
+      # The rig variant is debuggable but release-signed (see app/build.gradle.kts). Nothing else in
+      # CI compiles it, so build it here or it rots: a broken signingConfig would otherwise only
+      # surface on the rig. Falls back to the debug key when the keystore secret is absent.
+      - name: Build rig APK (debuggable, release-signed)
+        env:
+          RELEASE_KEYSTORE_FILE: ${{ runner.temp }}/release.keystore
+          RELEASE_STORE_PASSWORD: ${{ secrets.RELEASE_STORE_PASSWORD }}
+          RELEASE_KEY_ALIAS: ${{ secrets.RELEASE_KEY_ALIAS }}
+          RELEASE_KEY_PASSWORD: ${{ secrets.RELEASE_KEY_PASSWORD }}
+        run: ./gradlew :app:assembleRig
+      # Two assertions, because both failures are silent and both end at the same place - a wiped
+      # files/tdlib or a debuggable release-signed APK in someone's hands.
+      #
+      # 1. The rig APK must carry the same signer as release. A mistyped RELEASE_* secret name
+      #    leaves the release signingConfig unbuilt, rig quietly falls back to the debug key, and
+      #    the green build ships an APK that cannot install over a release one. Note WHERE each
+      #    mistyped name surfaces: a wrong password or alias fails :app:packageRelease outright
+      #    ("Given final block not properly padded"), so only a wrong RELEASE_KEYSTORE_BASE64 is
+      #    silent - it leaves the decode step with nothing to write and every later check with no
+      #    keystore to test. So the missing keystore is itself the assertion here, and it can only
+      #    be asserted where secrets are actually available: a fork PR legitimately has none and is
+      #    debug-signed by design, hence IS_TRUSTED rather than a test on the file alone.
+      # 2. Nothing debuggable may sit under the upload glob. The reviewer asked for a rig-filename
+      #    check; this tests the property instead, so it still holds if a later commit widens the
+      #    glob to all variants or renames the output - which is the actual risk.
+      - name: Verify rig signing and that no debuggable APK is uploaded
+        env:
+          RELEASE_KEYSTORE_FILE: ${{ runner.temp }}/release.keystore
+          # A PR from a fork gets no secrets, so an absent keystore is expected there and only
+          # there. Anywhere else it means RELEASE_KEYSTORE_BASE64 is missing or misnamed.
+          IS_TRUSTED: ${{ github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository }}
+        run: |
+          # No pipefail on purpose: every pipeline here ends in grep/head, and a short read from
+          # either is a normal outcome, not a build failure.
+          set -eu
+          apksigner=$(ls "$ANDROID_HOME"/build-tools/*/apksigner | sort -V | tail -1)
+          aapt2=$(ls "$ANDROID_HOME"/build-tools/*/aapt2 | sort -V | tail -1)
+          certof() { "$apksigner" verify --print-certs "$1" | grep 'SHA-256 digest' | head -1; }
+          # -t, so a dirty local outputs dir compares the build that just ran. CI has one of each.
+          rig=$(ls -t app/build/outputs/apk-named/rig/*.apk | head -1)
+          rel=$(ls -t app/build/outputs/apk-named/release/*.apk | head -1)
+          if [ -s "$RELEASE_KEYSTORE_FILE" ]; then
+            rigcert=$(certof "$rig")
+            relcert=$(certof "$rel")
+            # Both, not just rig: two empty digests would compare equal and pass for the wrong
+            # reason, which is the same silent green this step exists to stop.
+            if [ -z "$rigcert" ] || [ -z "$relcert" ]; then
+              echo "::error::No signer cert in $rig or $rel, though a keystore was decoded."
+              exit 1
+            fi
+            if [ "$rigcert" != "$relcert" ]; then
+              echo "::error::Rig and release APKs have different signers. A mistyped RELEASE_*" \
+                   "secret name does this: the release signingConfig is never created, release" \
+                   "goes out UNSIGNED, and rig silently falls back to the debug key."
+              exit 1
+            fi
+            echo "Rig APK carries the release cert."
+          elif [ "$IS_TRUSTED" = "true" ]; then
+            echo "::error::No release keystore was decoded on a run that has secrets. Check" \
+                 "RELEASE_KEYSTORE_BASE64: release is UNSIGNED and rig is debug-signed."
+            exit 1
+          else
+            echo "Fork PR: no secrets, so rig is debug-signed by design. Skipping the cert check."
+          fi
+          for apk in $UPLOAD_GLOB; do
+            [ -e "$apk" ] || continue
+            if "$aapt2" dump badging "$apk" | grep -q "application-debuggable"; then
+              echo "::error::$apk is debuggable and would be uploaded as an artifact."
+              exit 1
+            fi
+          done
+      # WARNING: never widen this to all variants. The rig APK is debuggable AND signed with the
+      # release key, so it upgrades a real install in place and run-as can then read files/tdlib,
+      # which holds a live Telegram session. The verify step above fails the build if a debuggable
+      # APK ever matches this glob.
       - name: Upload build outputs (APK)
         uses: actions/upload-artifact@v4
         with:
           name: telecloud-radio-${{ github.sha }}
-          path: '**/build/outputs/apk-named/release/*.apk'
+          path: ${{ env.UPLOAD_GLOB }}

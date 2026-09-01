@@ -29,6 +29,18 @@ android {
     val releaseKeystore = System.getenv("RELEASE_KEYSTORE_FILE")
         ?.let(::file)
         ?.takeIf { it.exists() && it.length() > 0L }
+    if (releaseKeystore == null) {
+        // Configuration-time, so it prints on every invocation - including assembleDebug, where it
+        // is expected and harmless. It matters for :app:assembleRelease (left unsigned) and for
+        // :app:assembleRig, which silently falls back to the debug key: a rig APK built this way
+        // cannot install over a release build, and the INSTALL_FAILED_UPDATE_INCOMPATIBLE that
+        // follows reads like a signature bug rather than a missing secret. One wrong secret name
+        // is enough to reach here with a green build.
+        logger.warn(
+            "RELEASE_KEYSTORE_FILE is unset or empty: release will be unsigned and the rig " +
+                "variant will be debug-signed, so it will NOT install over a release build.",
+        )
+    }
     signingConfigs {
         if (releaseKeystore != null) {
             create("release") {
@@ -57,6 +69,37 @@ android {
             signingConfig = signingConfigs.getByName("debug")
             isDebuggable = true
             matchingFallbacks += listOf("release")
+        }
+        // Rig build: debuggable, but signed with the RELEASE key so it installs straight over a
+        // release build. That combination is the point.
+        //
+        // Telecloud's Telegram session lives in files/tdlib (TdLibTelegramClient sets
+        // databaseDirectory there). A signature change forces an uninstall, and an uninstall wipes
+        // it - so a normal debug build costs a full Telegram re-login every time, which is why the
+        // rig has always tested release builds and had no `dbg` hooks, no `run-as`, and no way to
+        // read app storage. Same key = install -r just works, and isDebuggable enables all three.
+        //
+        // The same applicationId as release, deliberately: a suffix would install side by side and
+        // get its own empty files/tdlib, which is exactly what we are avoiding.
+        //
+        // Falls back to the debug key when the keystore is absent (fork PRs, CI without secrets) so
+        // the variant still builds; it just cannot install over a release build in that case. That
+        // fallback warns at configuration time, and CI fails the build if a keystore IS present but
+        // the rig APK did not end up carrying the release cert.
+        //
+        // Identity comes from versionName, not versionCode: a versionCode lives in defaultConfig
+        // and would move release too, and the two builds have to share one so that install -r
+        // works in BOTH directions without --allow-downgrade. So rig reports "1.0-rig" and release
+        // reports "1.0" at the same versionCode - `dumpsys package tech.capullo.telecloudradio`
+        // tells them apart, and so does the apk-named filename, which already carries the variant.
+        // An applicationIdSuffix would do it too, and is exactly what we must not use: it installs
+        // side by side with its own empty files/tdlib.
+        create("rig") {
+            initWith(getByName("debug"))
+            signingConfig = signingConfigs.findByName("release") ?: signingConfigs.getByName("debug")
+            isDebuggable = true
+            versionNameSuffix = "-rig"
+            matchingFallbacks += listOf("debug")
         }
     }
     compileOptions {
@@ -101,13 +144,16 @@ composeCompiler {
 // The standard app-<variant>.apk stays in place for installDebug and friends.
 androidComponents {
     onVariants { variant ->
-        val vn = android.defaultConfig.versionName
+        // The variant's OWN versionName, not defaultConfig's, so a versionNameSuffix reaches the
+        // filename: the rig APK is telecloud-radio-v1.0-rig-vc16-rig.apk, and a rig and a release
+        // APK at the same versionCode cannot be confused for each other on disk.
+        val vn = variant.outputs.first().versionName
         val vc = android.defaultConfig.versionCode
         val cap = variant.name.replaceFirstChar { it.uppercase() }
         val copyNamedApk = tasks.register<Copy>("copyNamedApk$cap") {
             from(variant.artifacts.get(SingleArtifact.APK)) {
                 include("*.apk")
-                rename { "telecloud-radio-v$vn-vc$vc-${variant.name}.apk" }
+                rename { "telecloud-radio-v${vn.get()}-vc$vc-${variant.name}.apk" }
             }
             into(layout.buildDirectory.dir("outputs/apk-named/${variant.name}"))
         }
