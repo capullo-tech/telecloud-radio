@@ -1,6 +1,6 @@
 # Perf scenario — queue/library sheet
 
-Same path every run, on the `benchmark` build, device SM-A730F (1080x2220).
+Same path every run, on the `rig` build (`:app:assembleRig`), device SM-A730F (1080x2220).
 Drive it with `scenario_run.sh` (adb input events) or manually following the same steps.
 
 Preconditions:

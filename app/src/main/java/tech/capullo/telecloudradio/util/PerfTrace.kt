@@ -4,7 +4,7 @@ import android.os.Trace
 
 /**
  * Thin atrace-section helpers for perf measurement (docs/perf/). Sections show up under the
- * app tag in atrace captures on the benchmark build type. Zero behavior change; cheap enough
+ * app tag in atrace captures on any debuggable build - the rig type. Zero behavior change; cheap enough
  * to keep in production.
  */
 object PerfTrace {

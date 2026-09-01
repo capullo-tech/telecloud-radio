@@ -2,6 +2,10 @@
 
 Date: 2026-07-26. Device: Samsung SM-A730F (Galaxy A8+ 2018), Android 9 (API 28), arm64.
 Build: `benchmark` type (initWith release + debuggable for API 28 atrace; minify off, same as release).
+NOTE (2026-09-01): the `benchmark` type has since been removed and perf work moved to `rig`.
+These numbers were taken on `benchmark` and are left as recorded. `rig` is debug-compiled
+rather than release-compiled, which changed nothing measurable while isMinifyEnabled stays
+false, so a fresh run is comparable to these baselines - but say which build produced it.
 Scenario: open queue sheet → fling queue ×3 → drag-reorder one row → switch to Library tab →
 type "roc" in search → close sheet. Driven by `scripts/perf/scenario_steps_only.sh` via adb,
 playback running throughout ("Fellow travelers" station, 28-track queue/library).
@@ -71,8 +75,8 @@ meets the ≥30% target); P50 frame time 26–29 ms → 21–26 ms.
 
 ## Caveats
 
-- atrace on API 28 has no perfetto; app sections require the debuggable `benchmark` build.
-  Representative because release already ships unminified.
+- atrace on API 28 has no perfetto; app sections require a debuggable build - `benchmark`
+  when this was measured, `rig` now. Representative because release already ships unminified.
 - gfxinfo runs are sensitive to device state (thermals, TDLib background sync); discard the
   first run after install and compare medians of ≥3 runs.
 - The 28-track library is small; filter costs scale linearly with library size, so the P3
