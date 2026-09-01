@@ -1,7 +1,9 @@
 package tech.capullo.telecloudradio
 
+import android.Manifest
 import android.content.Intent
 import android.content.pm.ApplicationInfo
+import android.content.pm.PackageManager
 import android.graphics.Color
 import android.os.Bundle
 import android.util.Log
@@ -9,6 +11,7 @@ import androidx.activity.ComponentActivity
 import androidx.activity.SystemBarStyle
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.getValue
@@ -17,6 +20,7 @@ import dagger.hilt.android.AndroidEntryPoint
 import tech.capullo.telecloudradio.data.SettingsRepository
 import tech.capullo.telecloudradio.data.ThemeMode
 import tech.capullo.telecloudradio.data.playlist.ActiveTrackRepository
+import tech.capullo.telecloudradio.player.PlaybackService
 import tech.capullo.telecloudradio.snapcast.SnapcastManager
 import tech.capullo.telecloudradio.ui.theme.TelecloudRadioTheme
 import javax.inject.Inject
@@ -71,9 +75,35 @@ class MainActivity : ComponentActivity() {
             // that is debuggable by definition, and it would make a bare `--es dbg tunnel` mean
             // opposite things on two apps that share a rig phone.
             "tunnel" -> settings.setTunnelEnabled(intent.getBooleanExtra("on", true))
+            // Acoustic sync calibration. Needs a live broadcast (no reference PCM otherwise) and
+            // RECORD_AUDIO; the permission is requested here when missing, and the calibration
+            // starts by itself once it is granted.
+            // am start ... --es dbg calibrate
+            "calibrate" -> startCalibration()
             else -> Log.w(TAG, "unknown dbg hook: $hook")
         }
     }
+
+    /**
+     * Ask for the mic if needed, then tell PlaybackService to calibrate. The service is reached by
+     * Intent because the app holds only a MediaController, which carries transport commands.
+     */
+    private fun startCalibration() {
+        if (checkSelfPermission(Manifest.permission.RECORD_AUDIO) != PackageManager.PERMISSION_GRANTED) {
+            micPermission.launch(Manifest.permission.RECORD_AUDIO)
+            return
+        }
+        calibrateNow()
+    }
+
+    private fun calibrateNow() = startService(
+        Intent(this, PlaybackService::class.java).setAction(PlaybackService.ACTION_CALIBRATE),
+    )
+
+    private val micPermission =
+        registerForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
+            if (granted) calibrateNow()
+        }
 
     override fun onStart() {
         super.onStart()

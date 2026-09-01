@@ -33,11 +33,18 @@ import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
+import tech.capullo.audio.calibration.CalibrationHost
+import tech.capullo.audio.calibration.FileCalibrationHistory
+import tech.capullo.audio.calibration.FileCalibrationJournal
+import tech.capullo.audio.calibration.FileVolumeUndo
+import tech.capullo.audio.calibration.ReferencePcmRing
+import tech.capullo.audio.calibration.SyncCalibrator
 import tech.capullo.audio.contracts.NowPlaying
 import tech.capullo.audio.contracts.PlaybackController
 import tech.capullo.audio.player.BalanceAudioProcessor
@@ -77,6 +84,120 @@ class PlaybackService : MediaSessionService() {
     private val balanceProcessor = BalanceAudioProcessor()
     private var fifoSink: FifoAudioBufferSink? = null
     private val serviceScope = CoroutineScope(SupervisorJob() + Dispatchers.Main)
+
+    // --- Acoustic sync calibration ---
+    //
+    // Ported from QuantumCast 2026-08-28. Everything measurable lives in capullo-audio's
+    // CalibrationHost; what stays here is the app's own knowledge: where the journals live, which
+    // clients this service can currently see, and how to arm a reference PCM source.
+    //
+    // Telecloud has no OS-volume boost (publishOsBoost) - that rides QC's stream metadata, which TC
+    // does not publish. Its absence only means a too-quiet client cannot be boosted mid-run.
+
+    /** Crash journal: a killed run's half-written latencies are undone on the next control connect. */
+    private val calibrationJournal by lazy { FileCalibrationJournal(this) }
+
+    /** Append-only log of verified corrections. */
+    private val calibrationHistory by lazy { FileCalibrationHistory(this) }
+
+    /** Pre-balance volumes, so a balance pass is one action away from reverted. */
+    private val calibrationVolumeUndo by lazy { FileVolumeUndo(this) }
+
+    /**
+     * Held here rather than by the calibrator so an engine restart mid-run can re-arm the NEW sink
+     * and the tap survives.
+     */
+    @Volatile private var calibrationTap: ReferencePcmRing? = null
+
+    private val calHost by lazy {
+        CalibrationHost(
+            context = this,
+            control = { snapcastManager.calibrationControl },
+            connectedClients = {
+                snapcastManager.state.value.groups.flatMap { it.clients }.filter { it.connected }.map {
+                    SyncCalibrator.CalClient(
+                        id = it.id,
+                        name = it.config.name,
+                        latencyMs = it.config.latency,
+                        volumePercent = it.config.volume.percent,
+                        muted = it.config.volume.muted,
+                    )
+                }
+            },
+            // ALL clients, connected or not - matches QuantumCast; the calibrator's own note explains why.
+            clientLatencies = {
+                snapcastManager.state.value.groups.flatMap { it.clients }
+                    .associate { it.id to it.config.latency }
+            },
+            localClientId = { snapcastManager.localClientId },
+            reference = { ring -> armReference(ring) },
+            suppressAudioFocusLosses = { snapcastManager.suppressFocusLosses(it) },
+            nowPlaying = {
+                val np = snapNowPlaying.value
+                "${np.title} | ${np.artist}"
+            },
+            refreshStatus = { snapcastManager.refreshStatus() },
+            journal = calibrationJournal,
+            history = calibrationHistory,
+            volumeUndo = calibrationVolumeUndo,
+        )
+    }
+
+    /** The running calibration, for the UI. Refusals are published on the same flow. */
+    val calibrationState: StateFlow<SyncCalibrator.State> get() = calHost.state
+
+    /**
+     * Arm a reference PCM source, or null when this device has no way to obtain one.
+     *
+     * Telecloud only broadcasts, so unlike QuantumCast there is no listen-in branch here: the
+     * reference is always the buffers already going into the snapserver FIFO.
+     */
+    private fun armReference(ring: ReferencePcmRing): (() -> Unit)? {
+        val sink = fifoSink ?: return null
+        calibrationTap = ring
+        sink.pcmTap = ring
+        return {
+            sink.pcmTap = null
+            calibrationTap = null
+        }
+    }
+
+    /**
+     * Start a calibration from an Intent, because nothing outside this process holds the service
+     * object: the app talks to it through a MediaController, which carries transport commands only.
+     * MainActivity's `dbg calibrate` hook sends [ACTION_CALIBRATE] here.
+     *
+     * Returning WITHOUT delegating to super for our own action is deliberate and was found the hard
+     * way: MediaSessionService.onStartCommand re-runs its own start path, which on this service
+     * tears the broadcast down and builds a NEW FIFO - destroying the very reference PCM the
+     * calibration is about to measure. Only foreign intents (media-button, restart) go to super.
+     */
+    override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
+        if (intent?.action == ACTION_CALIBRATE) {
+            startSyncCalibration()
+            return START_STICKY
+        }
+        return super.onStartCommand(intent, flags, startId)
+    }
+
+    /** Requires RECORD_AUDIO already granted - the caller asks for it first. */
+    fun startSyncCalibration() {
+        if (calHost.isRunning) {
+            Log.w(TAG, "calibrate ignored: a run is already in progress")
+            return
+        }
+        if (checkSelfPermission(android.Manifest.permission.RECORD_AUDIO) !=
+            android.content.pm.PackageManager.PERMISSION_GRANTED
+        ) {
+            return calHost.refuse("microphone permission not granted")
+        }
+        // Which role this device is in is the app's knowledge, so the check stays here. TC measures
+        // only as the broadcaster: without the FIFO sink there is no reference PCM to correlate.
+        if (fifoSink == null || !snapcastManager.state.value.isBroadcasting) {
+            return calHost.refuse("not broadcasting - nothing to calibrate")
+        }
+        calHost.start(serviceScope)
+    }
     private val mainHandler = Handler(Looper.getMainLooper())
 
     // The local playback player (ExoPlayer, wrapped by forwardingPlayer) and the listen-in stand-in
@@ -486,13 +607,18 @@ class PlaybackService : MediaSessionService() {
         super.onDestroy()
     }
 
-    private companion object {
-        const val TAG = "PlaybackService"
+    companion object {
+        /** Intent action that starts a sync calibration - see [onStartCommand]. Public because
+         *  MainActivity's dbg hook is the only way in: the app holds a MediaController, which
+         *  carries transport commands only. */
+        const val ACTION_CALIBRATE = "tech.capullo.telecloudradio.CALIBRATE"
+
+        private const val TAG = "PlaybackService"
 
         // Silence watchdog: how often it polls, and how long a playing track may go without any
         // audible PCM before it's judged undecodable and skipped. 8s comfortably clears normal
         // buffering / short silent intros while still cutting a dead track quickly.
-        const val WATCHDOG_TICK_MS = 1000L
-        const val SILENT_SKIP_MS = 8000L
+        private const val WATCHDOG_TICK_MS = 1000L
+        private const val SILENT_SKIP_MS = 8000L
     }
 }

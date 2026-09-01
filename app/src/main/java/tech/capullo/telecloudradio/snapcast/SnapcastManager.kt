@@ -161,6 +161,32 @@ class SnapcastManager @Inject constructor(
     private var currentSnapclientPort: Int = 0
     private var audioFocus: AudioFocusController? = null
 
+    // --- Calibration support ---
+    //
+    // CalibrationHost (capullo-audio) needs three things this class already owns privately: the
+    // JSON-RPC control client to write latencies, and the focus controller so a mic capture does
+    // not stop the local snapclient mid-run. (`localClientId` is already public, above.) Exposed
+    // narrowly and read-only rather than making the fields public - the manager stays the owner of
+    // both lifecycles.
+
+    /** JSON-RPC control, or null when neither broadcasting nor listening in. */
+    val calibrationControl: SnapcastControlClient? get() = controlClient
+
+    /**
+     * Suppress audio-focus LOSS handling for the duration of a mic capture.
+     *
+     * Opening this app's own recorder makes some OEM builds signal a focus loss, which would stop
+     * the local snapclient - the reference speaker - in the middle of a measurement.
+     */
+    fun suppressFocusLosses(suppress: Boolean) {
+        audioFocus?.suppressLosses = suppress
+    }
+
+    /** Re-request server state, so a calibration reads back the latency it just wrote. */
+    fun refreshStatus() {
+        scope.launch { controlClient?.sendGetStatus() }
+    }
+
     /**
      * (Re)creates the snapserver process + FIFO. Called by PlaybackService in
      * onCreate BEFORE the tee sink opens the pipe, so the write end always
