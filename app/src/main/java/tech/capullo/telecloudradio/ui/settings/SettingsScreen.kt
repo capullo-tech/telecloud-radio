@@ -1,5 +1,8 @@
 package tech.capullo.telecloudradio.ui.settings
 
+import android.graphics.BitmapFactory
+import androidx.compose.foundation.Image
+import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
@@ -10,16 +13,22 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Check
+import androidx.compose.material.icons.filled.Groups
 import androidx.compose.material.icons.filled.Remove
 import androidx.compose.material.icons.outlined.Info
 import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.ExposedDropdownMenuAnchorType
+import androidx.compose.material3.ExposedDropdownMenuBox
+import androidx.compose.material3.ExposedDropdownMenuDefaults
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -36,12 +45,17 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.ImageBitmap
+import androidx.compose.ui.graphics.asImageBitmap
+import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
@@ -50,16 +64,22 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewModelScope
 import dagger.hilt.android.lifecycle.HiltViewModel
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import tech.capullo.audio.ui.BalanceControls
 import tech.capullo.audio.ui.WebPlayerToggles
+import tech.capullo.source.telegram.data.telegram.TelegramChat
 import tech.capullo.telecloudradio.MiniPlayerHeight
 import tech.capullo.telecloudradio.data.SettingsRepository
 import tech.capullo.telecloudradio.data.ThemeMode
 import tech.capullo.telecloudradio.data.db.StationInfo
 import tech.capullo.telecloudradio.data.playlist.PlaylistRepository
+import tech.capullo.telecloudradio.data.telegram.TelegramRepository
 import tech.capullo.telecloudradio.player.DownloadManager
+import java.io.File
+import java.util.concurrent.ConcurrentHashMap
 import javax.inject.Inject
 import kotlin.math.roundToInt
 
@@ -68,6 +88,7 @@ class SettingsViewModel @Inject constructor(
     private val settings: SettingsRepository,
     private val downloadManager: DownloadManager,
     private val playlistRepository: PlaylistRepository,
+    private val telegramRepository: TelegramRepository,
 ) : ViewModel() {
 
     var rebuildDone by mutableStateOf(false)
@@ -78,6 +99,40 @@ class SettingsViewModel @Inject constructor(
 
     fun loadStations() {
         viewModelScope.launch { stations = playlistRepository.getStations() }
+    }
+
+    // Candidates for the public-link announcement dropdown (groups + channels). Loaded lazily
+    // when the dropdown is first expanded; the persisted selection itself lives in settings.
+    var notifyChats by mutableStateOf<List<TelegramChat>>(emptyList())
+        private set
+
+    fun loadNotifyChats() {
+        viewModelScope.launch {
+            runCatching { telegramRepository.getAudioGroups(200) }
+                .onSuccess { notifyChats = it }
+        }
+    }
+
+    // chatId → local path of the downloaded crisp avatar, so re-opening the dropdown (or
+    // recomposing it) doesn't re-download. Mirrors GroupSelectorViewModel.chatPhotoPath.
+    private val photoPathCache = ConcurrentHashMap<Long, String>()
+
+    suspend fun chatPhotoPath(chat: TelegramChat): String? {
+        photoPathCache[chat.id]?.let { return it }
+        val fileId = chat.photoFileId ?: return null
+        val path = telegramRepository.downloadChatPhoto(fileId)
+            ?.takeIf { it.isNotEmpty() && File(it).exists() }
+            ?: return null
+        photoPathCache[chat.id] = path
+        return path
+    }
+
+    val broadcastNotifyChatId: Long get() = settings.broadcastNotifyChatId
+    val broadcastNotifyChatTitle: String get() = settings.broadcastNotifyChatTitle
+
+    fun setBroadcastNotifyChannel(chatId: Long, title: String) {
+        settings.broadcastNotifyChatId = chatId
+        settings.broadcastNotifyChatTitle = title
     }
 
     // chatId = null rebuilds everything
@@ -252,7 +307,7 @@ fun SettingsScreen(
             )
             val tunnelEnabled by viewModel.tunnelEnabled.collectAsStateWithLifecycle()
             Row(
-                modifier = Modifier.fillMaxWidth(),
+                modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 8.dp),
                 horizontalArrangement = Arrangement.SpaceBetween,
                 verticalAlignment = androidx.compose.ui.Alignment.CenterVertically,
             ) {
@@ -267,6 +322,75 @@ fun SettingsScreen(
                     )
                 }
                 Switch(checked = tunnelEnabled, onCheckedChange = viewModel::setTunnelEnabled)
+            }
+
+            // Where to post the public link when a broadcast starts. Plain prefs-backed selection
+            // (id + display title), so the row holds a local mutableStateOf and writes through,
+            // same as the stepper rows below. The chat list loads lazily on first expand.
+            var notifySelection by remember {
+                mutableStateOf(viewModel.broadcastNotifyChatId to viewModel.broadcastNotifyChatTitle)
+            }
+            var notifyExpanded by remember { mutableStateOf(false) }
+            Column(
+                modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 8.dp),
+                verticalArrangement = Arrangement.spacedBy(4.dp),
+            ) {
+                Text("Announce public link in Telegram", style = MaterialTheme.typography.bodyMedium)
+                Text(
+                    "Post the link to the chosen channel or group when a broadcast starts.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+                ExposedDropdownMenuBox(
+                    expanded = notifyExpanded,
+                    onExpandedChange = {
+                        notifyExpanded = it
+                        if (it) viewModel.loadNotifyChats()
+                    },
+                ) {
+                    OutlinedTextField(
+                        value = if (notifySelection.first == 0L) {
+                            "Off"
+                        } else {
+                            notifySelection.second.ifBlank { "Chat ${notifySelection.first}" }
+                        },
+                        onValueChange = {},
+                        readOnly = true,
+                        singleLine = true,
+                        trailingIcon = {
+                            ExposedDropdownMenuDefaults.TrailingIcon(expanded = notifyExpanded)
+                        },
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .menuAnchor(ExposedDropdownMenuAnchorType.PrimaryNotEditable),
+                    )
+                    ExposedDropdownMenu(
+                        expanded = notifyExpanded,
+                        onDismissRequest = { notifyExpanded = false },
+                    ) {
+                        DropdownMenuItem(
+                            text = { Text("Off") },
+                            onClick = {
+                                notifySelection = 0L to ""
+                                viewModel.setBroadcastNotifyChannel(0L, "")
+                                notifyExpanded = false
+                            },
+                        )
+                        viewModel.notifyChats.forEach { chat ->
+                            DropdownMenuItem(
+                                text = { Text(chat.title) },
+                                leadingIcon = {
+                                    NotifyChatAvatar(chat, viewModel::chatPhotoPath)
+                                },
+                                onClick = {
+                                    notifySelection = chat.id to chat.title
+                                    viewModel.setBroadcastNotifyChannel(chat.id, chat.title)
+                                    notifyExpanded = false
+                                },
+                            )
+                        }
+                    }
+                }
             }
 
             HorizontalDivider(modifier = Modifier.padding(vertical = 8.dp))
@@ -399,6 +523,42 @@ fun SettingsScreen(
                 )
             }
         }
+    }
+}
+
+// Telegram channel/group avatar for the announce-target dropdown, mirroring the station list's
+// ChatAvatar at dropdown size: the inline minithumbnail (ships with the chat, no download) shows
+// instantly; a LaunchedEffect swaps in the crisp downloaded avatar when it lands. Falls back to a
+// generic icon when the chat has no photo or nothing decodes. [photoLoader] caches in the VM.
+@Composable
+private fun NotifyChatAvatar(chat: TelegramChat, photoLoader: suspend (TelegramChat) -> String?) {
+    val placeholder = remember(chat.photo) {
+        chat.photo?.let { BitmapFactory.decodeByteArray(it, 0, it.size)?.asImageBitmap() }
+    }
+    var crisp by remember(chat.id) { mutableStateOf<ImageBitmap?>(null) }
+    LaunchedEffect(chat.id, chat.photoFileId) {
+        if (chat.photoFileId == null) return@LaunchedEffect
+        val path = photoLoader(chat) ?: return@LaunchedEffect
+        crisp = withContext(Dispatchers.IO) {
+            BitmapFactory.decodeFile(path)?.asImageBitmap()
+        }
+    }
+    val avatarModifier = Modifier.size(28.dp).clip(CircleShape)
+    val shown = crisp ?: placeholder
+    if (shown != null) {
+        Image(
+            bitmap = shown,
+            contentDescription = null,
+            contentScale = ContentScale.Crop,
+            modifier = avatarModifier,
+        )
+    } else {
+        Icon(
+            Icons.Default.Groups,
+            contentDescription = null,
+            tint = MaterialTheme.colorScheme.onSurfaceVariant,
+            modifier = avatarModifier.background(MaterialTheme.colorScheme.surfaceVariant),
+        )
     }
 }
 

@@ -143,6 +143,10 @@ class TelegramRepository @Inject constructor(
     suspend fun getTotalSize(chatId: Long) = dao.getTotalSize(chatId) ?: 0L
     suspend fun downloadFile(chatId: Long, messageId: Long, onProgress: (Float) -> Unit = {}) = client.downloadFile(chatId, messageId, onProgress)
 
+    // Posts a plain-text message as the logged-in user (e.g. the broadcast public-link
+    // announcement). Posting rights are enforced server-side; failures raise TelegramException.
+    suspend fun sendMessage(chatId: Long, text: String) = client.sendMessage(chatId, text)
+
     suspend fun refreshReactions(chatId: Long, messageId: Long): String? {
         val reactions = client.getMessageReactions(chatId, messageId)
         dao.updateReactions(messageId, reactions)
