@@ -61,17 +61,9 @@ android {
             )
             signingConfig = signingConfigs.findByName("release")
         }
-        // Perf-measurement build: release-compiled (minify is off in release too, so this is
-        // near-identical perf-wise) but debuggable + debug-signed, which is required on API 28
-        // for atrace app sections and Studio profiling. See docs/perf/.
-        create("benchmark") {
-            initWith(getByName("release"))
-            signingConfig = signingConfigs.getByName("debug")
-            isDebuggable = true
-            matchingFallbacks += listOf("release")
-        }
         // Rig build: debuggable, but signed with the RELEASE key so it installs straight over a
-        // release build. That combination is the point.
+        // release build. That combination is the point. It is also where perf measurement happens
+        // now - see the `benchmark` note at the end of this block.
         //
         // Telecloud's Telegram session lives in files/tdlib (TdLibTelegramClient sets
         // databaseDirectory there). A signature change forces an uninstall, and an uninstall wipes
@@ -101,6 +93,22 @@ android {
             versionNameSuffix = "-rig"
             matchingFallbacks += listOf("debug")
         }
+        // There used to be a `benchmark` type here: release-compiled, debuggable, debug-signed,
+        // added in 013182f for the player/queue-sheet jank work (docs/perf/). It predated `rig`,
+        // and `rig` superseded it. Release-compiled bought nothing measurable while
+        // isMinifyEnabled stays false above - the old comment conceded as much, "minify is off in
+        // release too, so this is near-identical perf-wise" - so the two differed only in signing
+        // key, and debug-signed is the worse choice: it cannot install over a release build, which
+        // on TC means an uninstall and a wiped files/tdlib.
+        //
+        // Revisit when R8 is turned on, but try `isMinifyEnabled = true` on `rig` FIRST rather
+        // than reviving a second type: a minified, debuggable, release-signed rig profiles the
+        // code that actually ships and still installs over a release build. The reason that might
+        // not be enough is not the compilation flavour, it is that R8 renames and inlines - so
+        // method-level profiling comes back obfuscated without the mapping file, and inlining
+        // erases the frames a profiler wants. PerfTrace sections survive it (literal names passed
+        // to Trace.beginSection), so frame-timing work like docs/perf/ should be fine on a
+        // minified rig; symbol-level work is what would justify a separate type again.
     }
     compileOptions {
         sourceCompatibility = JavaVersion.VERSION_17
