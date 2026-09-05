@@ -59,6 +59,7 @@ import tech.capullo.telecloudradio.data.SettingsRepository
 import tech.capullo.telecloudradio.data.playlist.ActiveTrackRepository
 import tech.capullo.telecloudradio.data.playlist.PlaybackCommand
 import tech.capullo.telecloudradio.snapcast.SnapcastManager
+import tech.capullo.telecloudradio.util.renderAnnouncement
 import javax.inject.Inject
 
 /**
@@ -303,10 +304,8 @@ class PlaybackService : MediaSessionService() {
             return
         }
         val channel = settings.broadcastNotifyChatTitle.ifBlank { "the selected channel" }
-        val station = activeTrackRepository.activePlayback.value?.chatTitle
-            ?.takeIf { it.isNotBlank() }
-            ?: "Telecloud Radio"
-        val text = "🎙️ $station is live!\n🎧 Listen from anywhere: $url"
+        val station = activeTrackRepository.activePlayback.value?.chatTitle.orEmpty()
+        val text = renderAnnouncement(settings.broadcastNotifyTemplate, station, url)
         runCatching { telegramRepository.sendMessage(chatId, text) }
             .onSuccess {
                 Log.d(TAG, "Announced public link in chat $chatId")
