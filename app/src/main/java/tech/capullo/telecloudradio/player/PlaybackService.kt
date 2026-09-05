@@ -460,26 +460,37 @@ class PlaybackService : MediaSessionService() {
                 }
             }
         }
-        // Announce the public link in the configured Telegram chat each time THIS collector
-        // observes a tunnel connecting, i.e. a Starting → Active transition. Gating on the
-        // transition rather than distinctUntilChanged-on-the-url matters because TunnelManager is
-        // a singleton that outlives this service: a fresh collector attaching to a retained
-        // Active(oldUrl) from a previous broadcast would announce a link whose snapserver port
-        // stopBroadcast() already tore down (drop(1) can't fix that either - the first emission
-        // can just as well be a legitimate Active after a fast handshake). Reconnects still
-        // re-announce: quick tunnels mint a fresh URL per connection, so the earlier post is dead
-        // by then. Only a reconnect handing back the SAME url is skipped - the earlier post is
-        // live again, and a second one would be noise (lastAnnouncedUrl lives in the companion
-        // precisely so it survives service recreation within the process, like TunnelManager).
+        // Announce the public link in the configured Telegram chat when THIS collector observes
+        // the tunnel connect. The gate is "we have seen a previous emission", not "the previous
+        // emission was Starting", and the difference matters because state is a conflating
+        // StateFlow: if a reconnect lands while the send from the last one is still suspended, the
+        // Starting and the Active collapse into a single Active emission and a Starting-specific
+        // gate never fires - silently dropping exactly the reconnect it exists to catch. Requiring
+        // only a non-null predecessor still solves what the gate was built for, because
+        // TunnelManager is a singleton that outlives this service: on a fresh collector the
+        // retained Active(oldUrl) from a dead broadcast IS the first emission, so previous is null
+        // and nothing is announced. (drop(1) cannot express that - the first emission can just as
+        // well be a legitimate Active after a fast handshake.)
+        //
+        // Reconnects still re-announce: quick tunnels mint a fresh URL per connection, so the
+        // earlier post is dead by then. A reconnect handing back the SAME url is skipped, because
+        // the earlier post is live again and a second would be noise. lastAnnouncedUrl lives in
+        // the companion so it survives service recreation within the process, like the singleton.
+        //
+        // The send is launched rather than awaited inline, so the collector returns immediately
+        // and the next emission is never missed for being mid-send. That also means the url must
+        // be recorded here rather than after a successful post - two connects in flight at once
+        // would otherwise both see the old value and double-post; a post that fails is re-announced
+        // by the next connect, which carries a fresh url anyway.
         serviceScope.launch {
-            var previous: TunnelManager.TunnelState? = null
+            var seenFirstEmission = false
             tunnelManager.state.collect { state ->
                 val url = (state as? TunnelManager.TunnelState.Active)?.publicUrl
-                if (url != null && previous == TunnelManager.TunnelState.Starting && url != lastAnnouncedUrl) {
+                if (url != null && seenFirstEmission && url != lastAnnouncedUrl) {
                     lastAnnouncedUrl = url
-                    announcePublicLink(url)
+                    serviceScope.launch { announcePublicLink(url) }
                 }
-                previous = state
+                seenFirstEmission = true
             }
         }
         val player = ExoPlayer.Builder(this, renderersFactory)
@@ -690,7 +701,9 @@ class PlaybackService : MediaSessionService() {
 
         private const val TAG = "PlaybackService"
 
-        // Last public URL this process announced in Telegram. Companion-level on purpose: it
+        // Last public URL this process announced in Telegram - or is about to: it is set when the
+        // send is launched, not when it succeeds, so two connects arriving close together cannot
+        // both read the stale value and post the same url twice. Companion-level on purpose: it
         // must outlive service recreation just like the singleton TunnelManager does, so a
         // reconnect handing back an already-announced url doesn't double-post.
         var lastAnnouncedUrl: String? = null
