@@ -55,4 +55,14 @@ class AnnouncementTemplateTest {
     fun uppercaseUrlIsNotATokenAndAppendFires() {
         assertEquals("{{URL}}\nu", renderAnnouncement("{{URL}}", "S", "u"))
     }
+
+    @Test
+    fun stationValueContainingUrlTokenIsNotReExpanded() {
+        assertEquals("Now: {{url}}\nu", renderAnnouncement("Now: {{station}}", "{{url}}", "u"))
+    }
+
+    @Test
+    fun stationValueContainingUnknownTokenSurvives() {
+        assertEquals("A {{listnres}} B\nu", renderAnnouncement("A {{station}} B", "{{listnres}}", "u"))
+    }
 }

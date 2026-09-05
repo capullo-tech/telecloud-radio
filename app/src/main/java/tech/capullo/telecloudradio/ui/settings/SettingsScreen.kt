@@ -71,6 +71,8 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewModelScope
 import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.currentCoroutineContext
+import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.SharedFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -80,16 +82,17 @@ import kotlinx.coroutines.withContext
 import tech.capullo.audio.ui.BalanceControls
 import tech.capullo.audio.ui.WebPlayerToggles
 import tech.capullo.source.telegram.data.telegram.TelegramChat
-import tech.capullo.source.telegram.data.telegram.TelegramException
 import tech.capullo.telecloudradio.MiniPlayerHeight
 import tech.capullo.telecloudradio.data.SettingsRepository
 import tech.capullo.telecloudradio.data.ThemeMode
 import tech.capullo.telecloudradio.data.db.StationInfo
+import tech.capullo.telecloudradio.data.playlist.ActiveTrackRepository
 import tech.capullo.telecloudradio.data.playlist.PlaylistRepository
 import tech.capullo.telecloudradio.data.telegram.TelegramRepository
 import tech.capullo.telecloudradio.player.DownloadManager
 import tech.capullo.telecloudradio.util.ANNOUNCEMENT_SAMPLE_URL
 import tech.capullo.telecloudradio.util.DEFAULT_ANNOUNCEMENT_TEMPLATE
+import tech.capullo.telecloudradio.util.postFailureMessage
 import tech.capullo.telecloudradio.util.renderAnnouncement
 import java.io.File
 import java.util.concurrent.ConcurrentHashMap
@@ -102,6 +105,7 @@ class SettingsViewModel @Inject constructor(
     private val downloadManager: DownloadManager,
     private val playlistRepository: PlaylistRepository,
     private val telegramRepository: TelegramRepository,
+    private val activeTrackRepository: ActiveTrackRepository,
 ) : ViewModel() {
 
     var rebuildDone by mutableStateOf(false)
@@ -154,9 +158,11 @@ class SettingsViewModel @Inject constructor(
         settings.broadcastNotifyTemplate = value
     }
 
-    // Station shown in the preview / test post: the last selected station; the renderer applies
-    // the "Telecloud Radio" fallback when it's blank.
-    val previewStation: String get() = settings.lastGroupTitle
+    // Station shown in the preview / test post: the live broadcast's station when one is
+    // active (the station the real announcement would use), else the last selected; the
+    // renderer applies the "Telecloud Radio" fallback when it's blank.
+    val previewStation: String
+        get() = activeTrackRepository.activePlayback.value?.chatTitle ?: settings.lastGroupTitle
 
     var testPostInFlight by mutableStateOf(false)
         private set
@@ -171,22 +177,17 @@ class SettingsViewModel @Inject constructor(
         viewModelScope.launch {
             val text = renderAnnouncement(
                 settings.broadcastNotifyTemplate,
-                settings.lastGroupTitle,
+                previewStation,
                 ANNOUNCEMENT_SAMPLE_URL,
             )
             val channel = settings.broadcastNotifyChatTitle.ifBlank { "the selected channel" }
             runCatching { telegramRepository.sendMessage(chatId, text) }
                 .onSuccess { _testPostResult.tryEmit("Test message sent to $channel") }
                 .onFailure {
-                    val noRights = it is TelegramException &&
-                        it.message.contains("administrator rights", ignoreCase = true)
-                    _testPostResult.tryEmit(
-                        if (noRights) {
-                            "No permission to post in $channel - make the app account a channel admin"
-                        } else {
-                            "Couldn't post the test message: ${it.message ?: "unknown error"}"
-                        },
-                    )
+                    // runCatching traps CancellationException: clearing the VM while the send
+                    // is suspended must propagate the cancel, not raise a failure snackbar.
+                    currentCoroutineContext().ensureActive()
+                    _testPostResult.tryEmit(postFailureMessage(it, channel, "the test message"))
                 }
             testPostInFlight = false
         }
@@ -259,7 +260,9 @@ fun SettingsScreen(
         }
     }
     Scaffold(
-        snackbarHost = { SnackbarHost(snackbarHostState) },
+        snackbarHost = {
+            SnackbarHost(snackbarHostState, modifier = Modifier.padding(bottom = MiniPlayerHeight))
+        },
         topBar = {
             TopAppBar(
                 title = { Text("Settings") },
@@ -458,7 +461,7 @@ fun SettingsScreen(
             }
 
             // Announcement message template. The field prefills from pref.ifBlank { default } on
-            // every entry, so a cleared field re-shows the default; the pref itself is stored raw
+            // every entry, so a blank field re-shows the default; the pref itself is stored raw
             // (never the pre-filled default), so a future default change still reaches users who
             // never edited. Keystrokes and chip inserts write through verbatim.
             var template by remember {
@@ -468,6 +471,7 @@ fun SettingsScreen(
                     ),
                 )
             }
+            var confirmTestPost by remember { mutableStateOf(false) }
             Column(
                 modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 8.dp),
                 verticalArrangement = Arrangement.spacedBy(4.dp),
@@ -478,10 +482,10 @@ fun SettingsScreen(
                         FilterChip(
                             selected = false,
                             onClick = {
-                                val sel = template.selection.start
-                                val newText = template.text.substring(0, sel) + token +
-                                    template.text.substring(sel)
-                                template = TextFieldValue(newText, TextRange(sel + token.length))
+                                val sel = template.selection
+                                val newText = template.text.substring(0, sel.min) + token +
+                                    template.text.substring(sel.max)
+                                template = TextFieldValue(newText, TextRange(sel.min + token.length))
                                 viewModel.setBroadcastNotifyTemplate(newText)
                             },
                             label = { Text(token) },
@@ -498,11 +502,11 @@ fun SettingsScreen(
                     modifier = Modifier.fillMaxWidth(),
                 )
                 Text(
-                    "Tap a tag to insert it. Empty uses the default template.",
+                    "Tap a tag to insert it. Leave blank to use the default template.",
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
-                if ("{{url}}" !in template.text) {
+                if (template.text.isNotBlank() && "{{url}}" !in template.text) {
                     Text(
                         "No {{url}} in the message - the public link will be added at the end.",
                         style = MaterialTheme.typography.bodySmall,
@@ -519,12 +523,34 @@ fun SettingsScreen(
                     style = MaterialTheme.typography.bodyMedium,
                 )
                 OutlinedButton(
-                    onClick = viewModel::sendTestPost,
-                    enabled = viewModel.broadcastNotifyChatId != 0L && !viewModel.testPostInFlight,
+                    onClick = { confirmTestPost = true },
+                    enabled = notifySelection.first != 0L && !viewModel.testPostInFlight,
                     modifier = Modifier.fillMaxWidth(),
                 ) {
                     Text("Send test message")
                 }
+            }
+
+            if (confirmTestPost) {
+                AlertDialog(
+                    onDismissRequest = { confirmTestPost = false },
+                    title = { Text("Send test message?") },
+                    text = {
+                        Text(
+                            "A test announcement with a sample link will be posted to " +
+                                "${notifySelection.second.ifBlank { "the selected channel" }} - subscribers will see it.",
+                        )
+                    },
+                    confirmButton = {
+                        TextButton(onClick = {
+                            confirmTestPost = false
+                            viewModel.sendTestPost()
+                        }) { Text("Send") }
+                    },
+                    dismissButton = {
+                        TextButton(onClick = { confirmTestPost = false }) { Text("Cancel") }
+                    },
+                )
             }
 
             HorizontalDivider(modifier = Modifier.padding(vertical = 8.dp))
