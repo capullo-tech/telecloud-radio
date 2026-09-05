@@ -29,6 +29,7 @@ import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.ExposedDropdownMenuAnchorType
 import androidx.compose.material3.ExposedDropdownMenuBox
 import androidx.compose.material3.ExposedDropdownMenuDefaults
+import androidx.compose.material3.FilterChip
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -40,6 +41,9 @@ import androidx.compose.material3.Scaffold
 import androidx.compose.material3.SegmentedButton
 import androidx.compose.material3.SegmentedButtonDefaults
 import androidx.compose.material3.SingleChoiceSegmentedButtonRow
+import androidx.compose.material3.SnackbarDuration
+import androidx.compose.material3.SnackbarHost
+import androidx.compose.material3.SnackbarHostState
 import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
@@ -56,7 +60,9 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.ImageBitmap
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.text.TextRange
 import androidx.compose.ui.text.input.KeyboardType
+import androidx.compose.ui.text.input.TextFieldValue
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.hilt.lifecycle.viewmodel.compose.hiltViewModel
@@ -65,12 +71,16 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewModelScope
 import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.flow.MutableSharedFlow
+import kotlinx.coroutines.flow.SharedFlow
 import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import tech.capullo.audio.ui.BalanceControls
 import tech.capullo.audio.ui.WebPlayerToggles
 import tech.capullo.source.telegram.data.telegram.TelegramChat
+import tech.capullo.source.telegram.data.telegram.TelegramException
 import tech.capullo.telecloudradio.MiniPlayerHeight
 import tech.capullo.telecloudradio.data.SettingsRepository
 import tech.capullo.telecloudradio.data.ThemeMode
@@ -78,6 +88,9 @@ import tech.capullo.telecloudradio.data.db.StationInfo
 import tech.capullo.telecloudradio.data.playlist.PlaylistRepository
 import tech.capullo.telecloudradio.data.telegram.TelegramRepository
 import tech.capullo.telecloudradio.player.DownloadManager
+import tech.capullo.telecloudradio.util.ANNOUNCEMENT_SAMPLE_URL
+import tech.capullo.telecloudradio.util.DEFAULT_ANNOUNCEMENT_TEMPLATE
+import tech.capullo.telecloudradio.util.renderAnnouncement
 import java.io.File
 import java.util.concurrent.ConcurrentHashMap
 import javax.inject.Inject
@@ -133,6 +146,50 @@ class SettingsViewModel @Inject constructor(
     fun setBroadcastNotifyChannel(chatId: Long, title: String) {
         settings.broadcastNotifyChatId = chatId
         settings.broadcastNotifyChatTitle = title
+    }
+
+    val broadcastNotifyTemplate: String get() = settings.broadcastNotifyTemplate
+
+    fun setBroadcastNotifyTemplate(value: String) {
+        settings.broadcastNotifyTemplate = value
+    }
+
+    // Station shown in the preview / test post: the last selected station; the renderer applies
+    // the "Telecloud Radio" fallback when it's blank.
+    val previewStation: String get() = settings.lastGroupTitle
+
+    var testPostInFlight by mutableStateOf(false)
+        private set
+
+    private val _testPostResult = MutableSharedFlow<String>(extraBufferCapacity = 1)
+    val testPostResult: SharedFlow<String> = _testPostResult.asSharedFlow()
+
+    fun sendTestPost() {
+        val chatId = settings.broadcastNotifyChatId
+        if (chatId == 0L || testPostInFlight) return
+        testPostInFlight = true
+        viewModelScope.launch {
+            val text = renderAnnouncement(
+                settings.broadcastNotifyTemplate,
+                settings.lastGroupTitle,
+                ANNOUNCEMENT_SAMPLE_URL,
+            )
+            val channel = settings.broadcastNotifyChatTitle.ifBlank { "the selected channel" }
+            runCatching { telegramRepository.sendMessage(chatId, text) }
+                .onSuccess { _testPostResult.tryEmit("Test message sent to $channel") }
+                .onFailure {
+                    val noRights = it is TelegramException &&
+                        it.message.contains("administrator rights", ignoreCase = true)
+                    _testPostResult.tryEmit(
+                        if (noRights) {
+                            "No permission to post in $channel - make the app account a channel admin"
+                        } else {
+                            "Couldn't post the test message: ${it.message ?: "unknown error"}"
+                        },
+                    )
+                }
+            testPostInFlight = false
+        }
     }
 
     // chatId = null rebuilds everything
@@ -195,7 +252,14 @@ fun SettingsScreen(
     onBack: () -> Unit,
     viewModel: SettingsViewModel = hiltViewModel(),
 ) {
+    val snackbarHostState = remember { SnackbarHostState() }
+    LaunchedEffect(Unit) {
+        viewModel.testPostResult.collect { msg ->
+            snackbarHostState.showSnackbar(msg, duration = SnackbarDuration.Short)
+        }
+    }
     Scaffold(
+        snackbarHost = { SnackbarHost(snackbarHostState) },
         topBar = {
             TopAppBar(
                 title = { Text("Settings") },
@@ -390,6 +454,76 @@ fun SettingsScreen(
                             )
                         }
                     }
+                }
+            }
+
+            // Announcement message template. The field prefills from pref.ifBlank { default } on
+            // every entry, so a cleared field re-shows the default; the pref itself is stored raw
+            // (never the pre-filled default), so a future default change still reaches users who
+            // never edited. Keystrokes and chip inserts write through verbatim.
+            var template by remember {
+                mutableStateOf(
+                    TextFieldValue(
+                        viewModel.broadcastNotifyTemplate.ifBlank { DEFAULT_ANNOUNCEMENT_TEMPLATE },
+                    ),
+                )
+            }
+            Column(
+                modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 8.dp),
+                verticalArrangement = Arrangement.spacedBy(4.dp),
+            ) {
+                Text("Announcement message", style = MaterialTheme.typography.bodyMedium)
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    listOf("{{url}}", "{{station}}").forEach { token ->
+                        FilterChip(
+                            selected = false,
+                            onClick = {
+                                val sel = template.selection.start
+                                val newText = template.text.substring(0, sel) + token +
+                                    template.text.substring(sel)
+                                template = TextFieldValue(newText, TextRange(sel + token.length))
+                                viewModel.setBroadcastNotifyTemplate(newText)
+                            },
+                            label = { Text(token) },
+                        )
+                    }
+                }
+                OutlinedTextField(
+                    value = template,
+                    onValueChange = {
+                        template = it
+                        viewModel.setBroadcastNotifyTemplate(it.text)
+                    },
+                    minLines = 3,
+                    modifier = Modifier.fillMaxWidth(),
+                )
+                Text(
+                    "Tap a tag to insert it. Empty uses the default template.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+                if ("{{url}}" !in template.text) {
+                    Text(
+                        "No {{url}} in the message - the public link will be added at the end.",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.error,
+                    )
+                }
+                Text(
+                    "Preview (sample link)",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+                Text(
+                    renderAnnouncement(template.text, viewModel.previewStation, ANNOUNCEMENT_SAMPLE_URL),
+                    style = MaterialTheme.typography.bodyMedium,
+                )
+                OutlinedButton(
+                    onClick = viewModel::sendTestPost,
+                    enabled = viewModel.broadcastNotifyChatId != 0L && !viewModel.testPostInFlight,
+                    modifier = Modifier.fillMaxWidth(),
+                ) {
+                    Text("Send test message")
                 }
             }
 
