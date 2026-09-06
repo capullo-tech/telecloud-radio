@@ -53,12 +53,13 @@ import tech.capullo.audio.player.BalanceAudioProcessor
 import tech.capullo.audio.player.FifoAudioBufferSink
 import tech.capullo.audio.snapcast.firstArtist
 import tech.capullo.audio.tunnel.TunnelManager
-import tech.capullo.source.telegram.data.telegram.TelegramException
 import tech.capullo.telecloudradio.MainActivity
 import tech.capullo.telecloudradio.data.SettingsRepository
 import tech.capullo.telecloudradio.data.playlist.ActiveTrackRepository
 import tech.capullo.telecloudradio.data.playlist.PlaybackCommand
 import tech.capullo.telecloudradio.snapcast.SnapcastManager
+import tech.capullo.telecloudradio.util.postFailureMessage
+import tech.capullo.telecloudradio.util.renderAnnouncement
 import javax.inject.Inject
 
 /**
@@ -303,10 +304,8 @@ class PlaybackService : MediaSessionService() {
             return
         }
         val channel = settings.broadcastNotifyChatTitle.ifBlank { "the selected channel" }
-        val station = activeTrackRepository.activePlayback.value?.chatTitle
-            ?.takeIf { it.isNotBlank() }
-            ?: "Telecloud Radio"
-        val text = "🎙️ $station is live!\n🎧 Listen from anywhere: $url"
+        val station = activeTrackRepository.activePlayback.value?.chatTitle.orEmpty()
+        val text = renderAnnouncement(settings.broadcastNotifyTemplate, station, url)
         runCatching { telegramRepository.sendMessage(chatId, text) }
             .onSuccess {
                 Log.d(TAG, "Announced public link in chat $chatId")
@@ -318,15 +317,7 @@ class PlaybackService : MediaSessionService() {
                 // snackbar for a normal shutdown.
                 currentCoroutineContext().ensureActive()
                 Log.w(TAG, "Public-link announcement to chat $chatId failed: ${it.message}")
-                val noRights = it is TelegramException &&
-                    it.message.contains("administrator rights", ignoreCase = true)
-                activeTrackRepository.emitMessage(
-                    if (noRights) {
-                        "No permission to post in $channel - make the app account a channel admin"
-                    } else {
-                        "Couldn't post the public link to $channel: ${it.message ?: "unknown error"}"
-                    },
-                )
+                activeTrackRepository.emitMessage(postFailureMessage(it, channel, "the public link"))
             }
     }
 

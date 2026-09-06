@@ -96,6 +96,13 @@ class SettingsRepository @Inject constructor(@ApplicationContext context: Contex
             prefs.edit().putString("broadcast_notify_chat_title", value).apply()
         }
 
+    // Custom announcement message ({{url}}/{{station}} tokens); blank = the default template.
+    var broadcastNotifyTemplate: String
+        get() = prefs.getString("broadcast_notify_template", "") ?: ""
+        set(value) {
+            prefs.edit().putString("broadcast_notify_template", value).apply()
+        }
+
     var lastGroupTitle: String
         get() = prefs.getString("last_group_title", "") ?: ""
         set(value) {
