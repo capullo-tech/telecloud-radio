@@ -8,10 +8,12 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
+import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import tech.capullo.audio.contracts.NowPlaying
 import tech.capullo.audio.contracts.PlaybackController
@@ -504,13 +506,43 @@ class SnapcastManager @Inject constructor(
         focus.request()
     }
 
+    /**
+     * Start the local snapclient and keep it running until somebody actually asks it to stop.
+     *
+     * `libsnapclient.so` can exit on its own, and nothing used to notice: [SnapclientProcess.start]
+     * returned normally, this job simply completed, and [snapclientProcess] stayed non-null so even
+     * the focus-regain path's `snapclientProcess == null` guard refused to act. The device then
+     * played nothing while the broadcast carried on to every remote listener, with no UI trace.
+     * Measured on QuantumCast, which had the identical gap: silent for 1h50m before anyone noticed.
+     *
+     * THE TRAP THIS AVOIDS. [destroySnapclientProcess] stops the client with `destroyForcibly()`,
+     * which from inside `start()` looks exactly like a crash. A supervisor keyed on "the process is
+     * gone" would restart the client the instant [AudioFocusController] paused it and play over
+     * whatever app just took the speaker, which is the behaviour that controller exists to prevent.
+     * So the signal is the JOB: [destroySnapclientProcess] cancels this coroutine before destroying
+     * the process, so `isActive` is already false when `start()` returns and the loop ends.
+     *
+     * That ordering holds even though this manager's focus callbacks hop through
+     * `scope.launch` on [Dispatchers.IO]: cancel and destroy are both inside
+     * [destroySnapclientProcess], so they stay ordered with respect to each other whichever thread
+     * runs them.
+     */
     private fun launchSnapclientProcess(host: String, port: Int) {
         val channel = _state.value.snapclientChannel
         val sc = SnapclientProcess(context).also { snapclientProcess = it }
         snapclientStateJob = scope.launch {
             sc.connectionState.collect { s -> _state.update { it.copy(listenState = s) } }
         }
-        snapclientJob = scope.launch { sc.start(host, port, channel) }
+        snapclientJob = scope.launch {
+            var backoffMs = SNAPCLIENT_RETRY_MIN_MS
+            while (isActive) {
+                sc.start(host, port, channel)
+                if (!isActive) break
+                Log.w(TAG, "local snapclient exited on its own - restarting in ${backoffMs}ms")
+                delay(backoffMs)
+                backoffMs = (backoffMs * 2).coerceAtMost(SNAPCLIENT_RETRY_MAX_MS)
+            }
+        }
     }
 
     private fun destroySnapclientProcess() {
@@ -720,6 +752,12 @@ class SnapcastManager @Inject constructor(
 
     companion object {
         private const val TAG = "SnapcastManager"
+
+        /** Backoff bounds for restarting a local snapclient that exited on its own. Starts short
+         *  so a one-off native fault is inaudible, and caps so a genuinely broken target (server
+         *  gone, host unroutable) keeps retrying without spinning. */
+        private const val SNAPCLIENT_RETRY_MIN_MS = 1_000L
+        private const val SNAPCLIENT_RETRY_MAX_MS = 30_000L
 
         /** The Snapcast stream `name=` identity for this app (web player + snapclients). */
         private const val STREAM_NAME = "TelecloudRadio"
