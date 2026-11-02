@@ -91,6 +91,25 @@ class AudioMetadataReader @Inject constructor() {
         )
     }
 
+    /**
+     * REPLAYGAIN_TRACK_GAIN tag (Vorbis comment / ID3 TXXX / MP4 freeform), in dB - the gain a
+     * tagger already computed, so volume normalization can use it directly instead of decoding
+     * and analyzing the whole file. Null when absent or unparseable, which is common for
+     * Telegram-sourced uploads (not curated rips) - AudioAnalyzer.computeIntegratedLufs is the
+     * fallback for those. jaudiotagger 3.0.1 has no FieldKey.REPLAYGAIN_TRACK_GAIN (its FieldKey
+     * enum predates wide ReplayGain support), so this reads the raw custom-field key directly -
+     * the same lookup Tag.getFirst(FieldKey) does internally for mapped fields, just for an
+     * unmapped one; works uniformly across Vorbis comment (FLAC/Opus/OGG), ID3 TXXX (MP3), and
+     * MP4 freeform atoms. Format of the value varies by tagger ("-6.5 dB", "-6.5dB", "-6.5") -
+     * strip any trailing unit before parsing.
+     */
+    fun readReplayGainDb(path: String): Float? = runCatching {
+        val audioFile = AudioFileIO.read(File(path))
+        val raw = audioFile.tag?.getFirst("REPLAYGAIN_TRACK_GAIN")?.takeIf { it.isNotBlank() }
+            ?: return@runCatching null
+        raw.trim().removeSuffix("dB").removeSuffix("db").removeSuffix("DB").trim().toFloatOrNull()
+    }.getOrNull()
+
     private data class ExtractorResult(
         val codec: String?,
         val sampleRateHz: Int?,

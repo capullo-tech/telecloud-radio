@@ -31,10 +31,12 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.Close
+import androidx.compose.material.icons.filled.Favorite
 import androidx.compose.material.icons.filled.Groups
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.SearchOff
 import androidx.compose.material.icons.filled.Settings
+import androidx.compose.material.icons.outlined.FavoriteBorder
 import androidx.compose.material3.Button
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
@@ -88,6 +90,7 @@ fun GroupSelectorScreen(
 ) {
     val uiState by viewModel.uiState.collectAsStateWithLifecycle()
     val servers by snapViewModel.discoveredServers.collectAsStateWithLifecycle()
+    val favoriteIds by viewModel.favoriteStationIds.collectAsStateWithLifecycle()
 
     // Scan for local snapcast servers while this screen is on-screen
     DisposableEffect(Unit) {
@@ -151,10 +154,12 @@ fun GroupSelectorScreen(
                     chats = state.chats,
                     servers = servers,
                     lastGroupId = viewModel.lastGroupId,
+                    favoriteIds = favoriteIds,
                     bottomContentPadding = bottomContentPadding,
                     onSelect = viewModel::selectGroup,
                     onJoinDiscovered = onJoinDiscovered,
                     onJoinManual = onJoinManual,
+                    onToggleFavorite = viewModel::toggleFavorite,
                     photoLoader = viewModel::chatPhotoPath,
                 )
                 is GroupSelectorUiState.Syncing -> Column(
@@ -199,10 +204,12 @@ private fun ChatList(
     chats: List<TelegramChat>,
     servers: List<DiscoveredSnapserver>,
     lastGroupId: Long,
+    favoriteIds: Set<Long>,
     bottomContentPadding: Dp,
     onSelect: (TelegramChat) -> Unit,
     onJoinDiscovered: (DiscoveredSnapserver) -> Unit,
     onJoinManual: (host: String, typedPort: Int?) -> Unit,
+    onToggleFavorite: (Long) -> Unit,
     photoLoader: suspend (TelegramChat) -> String?,
 ) {
     // rememberSaveable so the filter survives rotation, but not opening a station: ChatList leaves
@@ -210,19 +217,18 @@ private fun ChatList(
     // is always re-entered with a fresh list and an empty field.
     var query by rememberSaveable { mutableStateOf("") }
     val searchable = chats.size >= SEARCH_THRESHOLD
-    val filtered = remember(chats, query, searchable) {
+    val filtered = remember(chats, query, searchable, favoriteIds) {
         val needle = query.trim()
         if (!searchable || needle.isEmpty()) {
-            chats
+            // No active query: favorites pinned to the top. Kotlin's sort is stable, so the
+            // original (TDLib pinned/recency) order is kept within each partition.
+            chats.sortedByDescending { it.id in favoriteIds }
         } else {
+            // A query is present: plain title match, unpinned - favorites are not forced to keep
+            // showing when they don't match.
             chats.filter { it.title.contains(needle, ignoreCase = true) }
         }
     }
-    // Lowering the Stations limit reloads the list live (GroupSelectorViewModel), which can pull it
-    // under the threshold and take the field away mid-query. Filtering is gated on `searchable`
-    // above so the rows come back in the same frame the field goes; this just drops the orphaned
-    // text, so raising the limit again doesn't restore a filter the user has forgotten about.
-    LaunchedEffect(searchable) { if (!searchable) query = "" }
 
     LazyColumn(
         modifier = Modifier.fillMaxSize(),
@@ -251,8 +257,7 @@ private fun ChatList(
                 EmptyStations(
                     icon = Icons.Default.Groups,
                     message = "No groups or channels found",
-                    hint = "Stations come from your Telegram groups and channels that contain " +
-                        "audio. Raise the station limit in Settings if you expect more.",
+                    hint = "Stations come from your Telegram groups and channels that contain audio.",
                 )
             }
             filtered.isEmpty() -> item {
@@ -266,8 +271,10 @@ private fun ChatList(
                 ChatRow(
                     chat = chat,
                     isLastPlayed = chat.id == lastGroupId,
+                    isFavorite = chat.id in favoriteIds,
                     photoLoader = photoLoader,
                     onSelect = onSelect,
+                    onToggleFavorite = { onToggleFavorite(chat.id) },
                 )
             }
         }
@@ -278,8 +285,10 @@ private fun ChatList(
 private fun ChatRow(
     chat: TelegramChat,
     isLastPlayed: Boolean,
+    isFavorite: Boolean,
     photoLoader: suspend (TelegramChat) -> String?,
     onSelect: (TelegramChat) -> Unit,
+    onToggleFavorite: () -> Unit,
 ) {
     val kind = chat.type.name.lowercase().replaceFirstChar { it.uppercase() }
     ListItem(
@@ -298,6 +307,15 @@ private fun ChatRow(
                 maxLines = 1,
                 overflow = TextOverflow.Ellipsis,
             )
+        },
+        trailingContent = {
+            IconButton(onClick = onToggleFavorite) {
+                Icon(
+                    imageVector = if (isFavorite) Icons.Filled.Favorite else Icons.Outlined.FavoriteBorder,
+                    contentDescription = if (isFavorite) "Remove from favorites" else "Add to favorites",
+                    tint = if (isFavorite) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
         },
         // The station you last listened to is the one you most often want again, so it carries a
         // container tint on top of the label - findable without re-reading every title.

@@ -125,7 +125,7 @@ class SettingsViewModel @Inject constructor(
 
     fun loadNotifyChats() {
         viewModelScope.launch {
-            runCatching { telegramRepository.getAudioGroups(200) }
+            runCatching { telegramRepository.getAudioGroups() }
                 .onSuccess { notifyChats = it }
         }
     }
@@ -219,11 +219,6 @@ class SettingsViewModel @Inject constructor(
             settings.sleepTimerMinutes = value
         }
 
-    var stationLimit: Int
-        get() = settings.stationLimit.value
-        set(value) {
-            settings.setStationLimit(value)
-        }
 
     val themeMode: StateFlow<ThemeMode> = settings.themeMode
     fun setThemeMode(mode: ThemeMode) = settings.setThemeMode(mode)
@@ -556,7 +551,7 @@ fun SettingsScreen(
             HorizontalDivider(modifier = Modifier.padding(vertical = 8.dp))
 
             // Compact rows (label + info-behind-(i) + tight control), ported from QC's
-            // dense Settings. Buffer, sleep and stations all use +/- steppers with
+            // dense Settings. Buffer and sleep use +/- steppers with
             // tap-to-type. NOTE: the VM exposes these as plain SharedPreferences-backed
             // vars (not snapshot state), so each row holds a local mutableStateOf and
             // writes through - reading the var alone won't recompose. Buffer is stored as
@@ -575,23 +570,6 @@ fun SettingsScreen(
                 onValueChange = {
                     bufferGb = it
                     viewModel.bufferSizeGb = it.toFloat()
-                },
-            )
-
-            HorizontalDivider(modifier = Modifier.padding(vertical = 8.dp))
-
-            var stationLimit by remember { mutableStateOf(viewModel.stationLimit) }
-            IntStepperRow(
-                title = "Stations",
-                info = "How many Telegram groups and channels to list on the station-select " +
-                    "screen. The list may show a few fewer if some chats aren't groups or channels.",
-                unit = null,
-                value = stationLimit,
-                range = 1..200,
-                step = 10,
-                onValueChange = {
-                    stationLimit = it
-                    viewModel.stationLimit = it
                 },
             )
 

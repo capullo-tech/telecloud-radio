@@ -2,6 +2,7 @@ package tech.capullo.telecloudradio.ui.player
 
 import android.content.ComponentName
 import android.content.Context
+import android.content.Intent
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
 import android.media.MediaMetadataRetriever
@@ -144,6 +145,27 @@ class PlayerViewModel @Inject constructor(
     // Last prefetch window handed to prefetchJob; used to skip pointless cancel/relaunch cycles.
     private var lastPrefetchWindow: List<Int>? = null
 
+    // Gapless advance: the playlist index (if any) currently staged as the controller's queued
+    // -but-not-yet-playing next MediaItem (addMediaItem, never setMediaItem - that would replace
+    // the whole queue). Media3 then transitions to it with no flush/preroll, so the FIFO never
+    // goes idle crossing a track boundary - unlike the old STATE_ENDED -> setMediaItem path, which
+    // tore the sink down and rebuilt it, very likely tripping snapserver's 120ms dryout window on
+    // every single track change. Kept to exactly ONE track ahead (not the whole playlist) because
+    // the playlist can be reordered/filtered live while listening; queueing further would risk
+    // playing a since-filtered-out or since-reordered item. Explicit jumps (user taps a track,
+    // NEXT/PREV, playAt) stay destructive via playTrack()/setMediaItem - only the natural
+    // end-of-track advance goes through this path (gated on
+    // Player.MEDIA_ITEM_TRANSITION_REASON_AUTO, which setMediaItem never produces).
+    private var enqueuedNextIndex: Int? = null
+    private var enqueueJob: Job? = null
+
+    // One-shot per item: set by maybeBeginCrossfade once it has fired ACTION_BEGIN_CROSSFADE for
+    // the current track, so the 500ms position loop doesn't resend it every tick. Reset wherever
+    // the "current track" identity changes (playTrack's explicit jump, onGaplessAdvance) and
+    // whenever syncEnqueuedNext retargets enqueuedNextIndex to a different track - an armed fade
+    // is only valid for the specific next-track it was started for.
+    private var crossfadeArmedForItem = false
+
     // Set when the countdown hit zero mid-track: playback finishes the current
     // track, then onTrackEnded pauses instead of advancing.
     private var sleepAtTrackEnd = false
@@ -171,6 +193,9 @@ class PlayerViewModel @Inject constructor(
                     }
                     if (state == Player.STATE_ENDED) onTrackEnded()
                 }
+                override fun onMediaItemTransition(mediaItem: MediaItem?, reason: Int) {
+                    if (reason == Player.MEDIA_ITEM_TRANSITION_REASON_AUTO) onGaplessAdvance()
+                }
                 override fun onIsPlayingChanged(isPlaying: Boolean) {
                     if (isPlaying && !controllerPreparedForCurrentChat) {
                         controller?.pause()
@@ -187,6 +212,7 @@ class PlayerViewModel @Inject constructor(
                 when (cmd) {
                     PlaybackCommand.NEXT -> nextTrack()
                     PlaybackCommand.PREV -> prevTrack()
+                    PlaybackCommand.GAPLESS_ADVANCED -> onGaplessAdvance()
                 }
             }
         }
@@ -338,7 +364,7 @@ class PlayerViewModel @Inject constructor(
                 // its audio history - before giving up, so auto-open doesn't dead-end on the empty
                 // "No audio tracks found" screen.
                 _uiState.value = PlayerUiState(isLoading = true)
-                val chat = runCatching { telegramRepository.getAudioGroups(200) }
+                val chat = runCatching { telegramRepository.getAudioGroups() }
                     .getOrNull()?.find { it.id == chatId }
                 if (chat != null) {
                     runCatching { telegramRepository.syncAudioMessages(chat) }
@@ -550,6 +576,7 @@ class PlayerViewModel @Inject constructor(
             // Prefetch even before playback starts (e.g. shuffling right after app open) -
             // otherwise "next" stays greyed with nothing downloading it
             if (playlist.isNotEmpty()) prefetchAhead(currentIndex)
+            syncEnqueuedNext()
             saveQueueState()
         }
     }
@@ -690,9 +717,38 @@ class PlayerViewModel @Inject constructor(
                 PerfTrace.section("VM.positionTick") {
                     _positionState.value = controller?.currentPosition ?: 0L
                 }
+                maybeBeginCrossfade()
                 delay(500L)
             }
         }
+    }
+
+    // Fires PlaybackService.ACTION_BEGIN_CROSSFADE once per item, when the staged next track
+    // (enqueuedNextIndex - same selection as plain gapless, see syncEnqueuedNext) is close enough
+    // to the current track's end to start prerolling. CROSSFADE_TRIGGER_MS = fade length + preroll
+    // slack, so the secondary player should already be at STATE_READY by the time the fade window
+    // (the trailing CROSSFADE_DURATION_MS) actually begins. Not a hard guarantee - a slow decode
+    // or disk read can still push the fade start later; PlaybackService.beginCrossfade() is
+    // idempotent per uri and the existing plain-gapless addMediaItem stays wired as a fallback
+    // (syncEnqueuedNext still runs), so a late/failed crossfade degrades to a normal gapless
+    // transition instead of a broken one.
+    private fun maybeBeginCrossfade() {
+        if (crossfadeArmedForItem) return
+        val duration = _uiState.value.trackDuration
+        if (duration <= 0L) return
+        if (duration - _positionState.value > CROSSFADE_TRIGGER_MS) return
+        val target = enqueuedNextIndex ?: return
+        val track = playlist.getOrNull(target) ?: return
+        val path = downloadManager.getCachedPath(track.messageId) ?: return
+        crossfadeArmedForItem = true
+        context.startService(
+            Intent(context, PlaybackService::class.java).apply {
+                action = PlaybackService.ACTION_BEGIN_CROSSFADE
+                putExtra(PlaybackService.EXTRA_URI, Uri.fromFile(File(path)).toString())
+                putExtra(PlaybackService.EXTRA_MESSAGE_ID, track.messageId)
+                putExtra(PlaybackService.EXTRA_DURATION_MS, CROSSFADE_DURATION_MS)
+            },
+        )
     }
 
     fun toggleSleepTimer() {
@@ -756,6 +812,121 @@ class PlayerViewModel @Inject constructor(
                 ) {
                     viewModelScope.launch { playTrack(currentIndex + 1) }
                 }
+        }
+    }
+
+    // Computes which playlist index should play after the current one, under the active repeat
+    // mode - same semantics as onTrackEnded's switch, factored out so the gapless pre-enqueue
+    // (syncEnqueuedNext) and the natural end-of-track advance agree on "what's next". Returns null
+    // when nothing should follow (repeat off, sitting on the last track; or repeat-one with the
+    // playing track filtered out of the queue, matching onTrackEnded's existing seekTo(0) fallback
+    // for that edge case).
+    private fun nextIndexForAdvance(): Int? = when (_uiState.value.repeatMode) {
+        Player.REPEAT_MODE_ONE -> currentIndex.takeIf { it >= 0 }
+        Player.REPEAT_MODE_ALL -> (currentIndex + 1).mod(playlist.size).takeIf { playlist.isNotEmpty() }
+        else -> (currentIndex + 1).takeIf { it < playlist.size }
+    }
+
+    // Keeps exactly one track staged ahead in the controller's queue (addMediaItem, index 1) for
+    // gapless auto-advance - see enqueuedNextIndex's doc. Called after every playlist mutation
+    // (publishQueue), after playTrack lands a new current track, after prefetchAhead's download of
+    // the next file completes (the file may not have existed yet on the first call), and after a
+    // gapless transition fires (to stage the one after that). Cheap no-op when the desired target
+    // already matches what's staged.
+    private fun syncEnqueuedNext() {
+        val target = nextIndexForAdvance()
+        if (target == enqueuedNextIndex) return
+        enqueueJob?.cancel()
+        controller?.let { if (it.mediaItemCount > 1) it.removeMediaItem(1) }
+        enqueuedNextIndex = null
+        crossfadeArmedForItem = false
+        if (target == null || target !in playlist.indices) return
+        val track = playlist[target]
+        enqueueJob = viewModelScope.launch {
+            // Not downloaded yet: bail quietly. prefetchAhead's own loop calls syncEnqueuedNext
+            // again right after this file lands, which retries.
+            val path = downloadManager.getCachedPath(track.messageId) ?: return@launch
+            val (albumArt, audioMeta) = withContext(Dispatchers.IO) {
+                val meta = audioMetadataReader.read(path)
+                Pair(squareCropArt(extractAlbumArt(path) ?: albumArtFetcher.cached(track.messageId)), meta)
+            }
+            // The playlist/current position may have moved on while this suspended (reorder,
+            // filter, explicit skip) - re-validate before committing instead of staging a stale item.
+            if (nextIndexForAdvance() != target) return@launch
+            val displayTrack = track.copy(
+                title = audioMeta.tagTitle ?: track.title,
+                performer = audioMeta.tagArtist ?: track.performer,
+            )
+            val mediaMetadata = MediaMetadata.Builder()
+                .setTitle(displayTrack.title ?: displayTrack.fileName ?: "Unknown")
+                .setArtist(displayTrack.performer)
+                .setStation(chatTitle.takeIf { it.isNotBlank() })
+                .apply { albumArt?.let { setArtworkData(it, MediaMetadata.PICTURE_TYPE_FRONT_COVER) } }
+                .build()
+            controller?.addMediaItem(
+                MediaItem.Builder()
+                    .setMediaId(track.messageId.toString())
+                    .setUri(Uri.fromFile(File(path)))
+                    .setMediaMetadata(mediaMetadata)
+                    .build(),
+            )
+            enqueuedNextIndex = target
+        }
+    }
+
+    // Fires when ExoPlayer itself auto-advances into the pre-enqueued next item (gapless - no
+    // flush, no preroll, the FIFO never idles crossing the boundary). Mirrors playTrack's
+    // "truthful swap" tail: the track is now actually audible, so every user-visible field updates
+    // for real. Does not call setMediaItem/prepare/play - ExoPlayer is already playing it.
+    private fun onGaplessAdvance() {
+        if (playlist.isEmpty() || !controllerPreparedForCurrentChat) return
+        val index = enqueuedNextIndex ?: return
+        val track = playlist.getOrNull(index) ?: return
+        val path = downloadManager.getCachedPath(track.messageId) ?: return
+        enqueuedNextIndex = null
+        crossfadeArmedForItem = false
+        currentIndex = index
+        downloadManager.activeMessageId = track.messageId
+        viewModelScope.launch {
+            val (albumArt, audioMeta) = withContext(Dispatchers.IO) {
+                val meta = audioMetadataReader.read(path)
+                Pair(squareCropArt(extractAlbumArt(path) ?: albumArtFetcher.cached(track.messageId)), meta)
+            }
+            val displayTrack = track.copy(
+                title = audioMeta.tagTitle ?: track.title,
+                performer = audioMeta.tagArtist ?: track.performer,
+            )
+            _activeDownloadProgress.value = null
+            _positionState.value = 0L
+            _uiState.value = _uiState.value.copy(
+                track = displayTrack,
+                albumArt = albumArt,
+                isLoading = false,
+                audioMeta = audioMeta,
+                currentIndex = index,
+                trackDuration = controller?.duration?.takeIf { it > 0L } ?: 0L,
+                audioAnalysis = null,
+                showStats = false,
+                showReactions = false,
+                reactionsInfo = null,
+            )
+            activeTrackRepository.set(track, chatId, chatTitle)
+            saveLastPlayed(chatId, track.messageId)
+            activeTrackRepository.updateTrack(displayTrack)
+            activeTrackRepository.updateAlbumArt(albumArt)
+            refreshNextTrackState()
+            prefetchAhead(index)
+            syncEnqueuedNext()
+            if (connectivityMonitor.isOnline.value) {
+                runCatching {
+                    val reactions = telegramRepository.refreshReactions(track.chatId, track.messageId)
+                    if (_uiState.value.track?.messageId == track.messageId) {
+                        _uiState.value = _uiState.value.copy(
+                            track = _uiState.value.track!!.copy(reactions = reactions),
+                        )
+                    }
+                }
+            }
         }
     }
 
@@ -1080,9 +1251,15 @@ class PlayerViewModel @Inject constructor(
             .setStation(chatTitle.takeIf { it.isNotBlank() })
             .apply { albumArt?.let { setArtworkData(it, MediaMetadata.PICTURE_TYPE_FRONT_COVER) } }
             .build()
+        // setMediaItem replaces the whole controller queue (including any item staged by a
+        // previous syncEnqueuedNext) with just this one - drop the stale tracking var to match.
+        enqueuedNextIndex = null
+        crossfadeArmedForItem = false
+        enqueueJob?.cancel()
         controller?.apply {
             setMediaItem(
                 MediaItem.Builder()
+                    .setMediaId(track.messageId.toString())
                     .setUri(Uri.fromFile(File(path)))
                     .setMediaMetadata(mediaMetadata)
                     .build(),
@@ -1093,6 +1270,7 @@ class PlayerViewModel @Inject constructor(
 
         refreshNextTrackState()
         prefetchAhead(index)
+        syncEnqueuedNext()
         // Note: no eager eviction of the previous track - recently played files stay on
         // disk (LRU) until the GB buffer limit pushes them out, so "previous" is instant.
 
@@ -1153,6 +1331,9 @@ class PlayerViewModel @Inject constructor(
                 val path = downloadManager.getCachedPath(t.messageId)
                     ?: downloadManager.ensureDownloaded(t.chatId, t.messageId)
                 refreshNextTrackState()
+                // The file for a gapless-staging target (nextIndexForAdvance) may not have existed
+                // on syncEnqueuedNext's earlier attempt; retry now that it (might have) landed.
+                if (path != null && i == nextIndexForAdvance()) syncEnqueuedNext()
                 // Pre-fetch online art too, so the lock screen has it at play start
                 if (path != null && albumArtFetcher.cached(t.messageId) == null &&
                     connectivityMonitor.isOnline.value
@@ -1278,5 +1459,14 @@ class PlayerViewModel @Inject constructor(
         // vanish the moment you left the player. activePlayback is app-scoped state that must
         // outlive this screen; it is cleared when playback truly stops (PlaybackService.onDestroy).
         super.onCleared()
+    }
+
+    private companion object {
+        // Fade length and the lead time (fade + preroll slack) before a track's end at which
+        // maybeBeginCrossfade fires - see its doc. Kept here rather than PlaybackService's
+        // DEFAULT_CROSSFADE_DURATION_MS because the trigger threshold needs preroll slack on top
+        // of the fade length, which is a VM-side (position-loop) concern, not the service's.
+        const val CROSSFADE_DURATION_MS = 4000L
+        const val CROSSFADE_TRIGGER_MS = 5500L
     }
 }

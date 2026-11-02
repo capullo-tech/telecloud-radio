@@ -7,10 +7,11 @@ import dagger.Provides
 import dagger.hilt.InstallIn
 import dagger.hilt.android.qualifiers.ApplicationContext
 import dagger.hilt.components.SingletonComponent
+import javax.inject.Singleton
 import tech.capullo.telecloudradio.data.db.AudioAnalysisDao
 import tech.capullo.telecloudradio.data.db.MediaMessageDao
 import tech.capullo.telecloudradio.data.db.MediaMessageDatabase
-import javax.inject.Singleton
+import tech.capullo.telecloudradio.data.db.TrackGainDao
 
 @Module
 @InstallIn(SingletonComponent::class)
@@ -24,6 +25,7 @@ object DatabaseModule {
             MediaMessageDatabase.MIGRATION_2_3,
             MediaMessageDatabase.MIGRATION_3_4,
             MediaMessageDatabase.MIGRATION_4_5,
+            MediaMessageDatabase.MIGRATION_5_6,
         )
         // Wipes and recreates DB on downgrade (dev-time safety net for intermediate builds)
         .fallbackToDestructiveMigration(dropAllTables = true)
@@ -34,4 +36,7 @@ object DatabaseModule {
 
     @Provides
     fun provideAudioAnalysisDao(db: MediaMessageDatabase): AudioAnalysisDao = db.audioAnalysisDao()
+
+    @Provides
+    fun provideTrackGainDao(db: MediaMessageDatabase): TrackGainDao = db.trackGainDao()
 }
