@@ -219,7 +219,6 @@ class SettingsViewModel @Inject constructor(
             settings.sleepTimerMinutes = value
         }
 
-
     val themeMode: StateFlow<ThemeMode> = settings.themeMode
     fun setThemeMode(mode: ThemeMode) = settings.setThemeMode(mode)
 

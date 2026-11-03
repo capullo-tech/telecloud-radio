@@ -91,7 +91,9 @@ class CrossfadeMixer(
     private val output: TeeAudioProcessor.AudioBufferSink,
 ) : TeeAudioProcessor.AudioBufferSink {
     @Volatile private var fadeDurationMs: Long = 0L
+
     @Volatile private var fadeStartElapsedMs: Long = 0L
+
     @Volatile private var fading = false
     private var incomingQueue: ArrayBlockingQueue<ByteArray>? = null
     private var incomingCarry: ByteArray? = null

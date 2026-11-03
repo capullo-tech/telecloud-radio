@@ -19,6 +19,7 @@ class AudioAnalyzer @Inject constructor() {
         const val SPECTRUM_BINS = 256
         const val FLOOR_DB = -120f
         private const val MAX_ANALYZE_SECONDS = 30
+
         // Full-track cap for computeIntegratedLufs (volume normalization), not the stats-sheet
         // analyze() above. 3 minutes is enough content for a stable gated-integrated-loudness
         // estimate for virtually all music (ITU-R BS.1770 / EBU R128 practice uses far shorter
@@ -32,6 +33,7 @@ class AudioAnalyzer @Inject constructor() {
         // computed from their first 3 minutes rather than the true full-track loudness - an
         // acceptable approximation, and most tracks' loudness is stable well before this point.
         private const val MAX_GAIN_ANALYZE_SECONDS = 180
+
         // Starting size for computeIntegratedLufs's growable decode buffer - ~30s stereo at 48kHz,
         // doubled as needed up to MAX_GAIN_ANALYZE_SECONDS. Most tracks need only a few doublings.
         private const val INITIAL_GAIN_BUFFER_SAMPLES = 48_000 * 30 * 2

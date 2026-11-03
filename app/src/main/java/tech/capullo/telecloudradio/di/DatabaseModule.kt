@@ -7,11 +7,11 @@ import dagger.Provides
 import dagger.hilt.InstallIn
 import dagger.hilt.android.qualifiers.ApplicationContext
 import dagger.hilt.components.SingletonComponent
-import javax.inject.Singleton
 import tech.capullo.telecloudradio.data.db.AudioAnalysisDao
 import tech.capullo.telecloudradio.data.db.MediaMessageDao
 import tech.capullo.telecloudradio.data.db.MediaMessageDatabase
 import tech.capullo.telecloudradio.data.db.TrackGainDao
+import javax.inject.Singleton
 
 @Module
 @InstallIn(SingletonComponent::class)
