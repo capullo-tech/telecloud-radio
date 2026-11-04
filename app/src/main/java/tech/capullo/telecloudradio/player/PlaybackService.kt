@@ -562,10 +562,13 @@ class PlaybackService : MediaSessionService() {
 
         player.addListener(object : Player.Listener {
             override fun onMediaItemTransition(mediaItem: MediaItem?, reason: Int) {
-                // Fresh track → apply its stored normalization gain: unity until the lookup lands,
-                // and for a track never analyzed. Covers the gapless addMediaItem advance and
-                // explicit setMediaItem jumps alike; the mediaId re-check drops a lookup that lands
-                // after the player has already moved on.
+                // Fresh track → restart the silence grace window and clear the per-item skip guard.
+                // Fires for the gapless addMediaItem advance as well as explicit setMediaItem jumps.
+                trackStartedElapsedMs = SystemClock.elapsedRealtime()
+                silenceSkipFiredForItem = false
+                // Apply its stored normalization gain: unity until the lookup lands, and for a
+                // track never analyzed. The mediaId re-check drops a lookup that lands after the
+                // player has already moved on.
                 val messageId = mediaItem?.mediaId?.toLongOrNull()
                 gainProcessor.gain = 1f
                 if (messageId != null) {
