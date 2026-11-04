@@ -8,6 +8,8 @@ import java.io.File
 import javax.inject.Inject
 import javax.inject.Singleton
 
+data class ReplayGain(val gainDb: Float, val peak: Float?)
+
 data class AudioMetadata(
     val codec: String?,
     val bitrateKbps: Int?,
@@ -92,10 +94,10 @@ class AudioMetadataReader @Inject constructor() {
     }
 
     /**
-     * REPLAYGAIN_TRACK_GAIN tag (Vorbis comment / ID3 TXXX / MP4 freeform), in dB - the gain a
+     * REPLAYGAIN_TRACK_GAIN (dB) and, when present, REPLAYGAIN_TRACK_PEAK (Vorbis comment / ID3 TXXX / MP4 freeform) - the gain a
      * tagger already computed, so volume normalization can use it directly instead of decoding
      * and analyzing the whole file. Null when absent or unparseable, which is common for
-     * Telegram-sourced uploads (not curated rips) - AudioAnalyzer.computeIntegratedLufs is the
+     * Telegram-sourced uploads (not curated rips) - AudioAnalyzer.measureLoudness is the
      * fallback for those. jaudiotagger 3.0.1 has no FieldKey.REPLAYGAIN_TRACK_GAIN (its FieldKey
      * enum predates wide ReplayGain support), so this reads the raw custom-field key directly -
      * the same lookup Tag.getFirst(FieldKey) does internally for mapped fields, just for an
@@ -103,12 +105,14 @@ class AudioMetadataReader @Inject constructor() {
      * MP4 freeform atoms. Format of the value varies by tagger ("-6.5 dB", "-6.5dB", "-6.5") -
      * strip any trailing unit before parsing.
      */
-    fun readReplayGainDb(path: String): Float? = runCatching {
-        val audioFile = AudioFileIO.read(File(path))
-        val raw = audioFile.tag?.getFirst("REPLAYGAIN_TRACK_GAIN")?.takeIf { it.isNotBlank() }
-            ?: return@runCatching null
-        raw.trim().removeSuffix("dB").removeSuffix("db").removeSuffix("DB").trim().toFloatOrNull()
+    fun readReplayGain(path: String): ReplayGain? = runCatching {
+        val tag = AudioFileIO.read(File(path)).tag ?: return@runCatching null
+        val gain = tag.getFirst("REPLAYGAIN_TRACK_GAIN")?.let(::parseNumber) ?: return@runCatching null
+        // Peak is linear full scale ("0.987654"); optional, and only used to cap a boost.
+        ReplayGain(gain, tag.getFirst("REPLAYGAIN_TRACK_PEAK")?.let(::parseNumber))
     }.getOrNull()
+
+    private fun parseNumber(raw: String): Float? = raw.trim().removeSuffix("dB").removeSuffix("db").removeSuffix("DB").trim().takeIf { it.isNotEmpty() }?.toFloatOrNull()
 
     private data class ExtractorResult(
         val codec: String?,

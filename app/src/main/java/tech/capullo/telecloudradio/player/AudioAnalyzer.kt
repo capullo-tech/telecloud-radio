@@ -4,6 +4,7 @@ import android.media.AudioFormat
 import android.media.MediaCodec
 import android.media.MediaExtractor
 import android.media.MediaFormat
+import tech.capullo.audio.player.KWeighting
 import java.io.File
 import java.nio.ByteBuffer
 import java.nio.ByteOrder
@@ -20,23 +21,6 @@ class AudioAnalyzer @Inject constructor() {
         const val FLOOR_DB = -120f
         private const val MAX_ANALYZE_SECONDS = 30
 
-        // Full-track cap for computeIntegratedLufs (volume normalization), not the stats-sheet
-        // analyze() above. 3 minutes is enough content for a stable gated-integrated-loudness
-        // estimate for virtually all music (ITU-R BS.1770 / EBU R128 practice uses far shorter
-        // excerpts routinely) while bounding worst-case decode memory for a background per-track
-        // pass. The decode buffer GROWS toward this cap rather than being pre-sized to it (see
-        // decodePcmUnboxed) - even so, device testing showed concurrent gain computations (the
-        // prefetch window can trigger several close together) still produced repeated
-        // OutOfMemoryError at the original 600s/~230MB cap on this low-end test device; lowering
-        // the cap AND serializing computations (DownloadManager.gainSemaphore) together bring
-        // worst-case single-decode memory down to ~69MB. Tracks longer than this cap get a gain
-        // computed from their first 3 minutes rather than the true full-track loudness - an
-        // acceptable approximation, and most tracks' loudness is stable well before this point.
-        private const val MAX_GAIN_ANALYZE_SECONDS = 180
-
-        // Starting size for computeIntegratedLufs's growable decode buffer - ~30s stereo at 48kHz,
-        // doubled as needed up to MAX_GAIN_ANALYZE_SECONDS. Most tracks need only a few doublings.
-        private const val INITIAL_GAIN_BUFFER_SAMPLES = 48_000 * 30 * 2
         private const val SPECT_TIME_BINS = 200
         private const val SPECT_FREQ_BINS = 256
     }
@@ -241,74 +225,98 @@ class AudioAnalyzer @Inject constructor() {
     }
 
     // ── Gated integrated LUFS, for volume-normalization gain (separate from the stats-sheet
-    // analyze() above, which stays capped at MAX_ANALYZE_SECONDS/uses the ungated computeLufs
-    // below - that's an on-demand UI feature where a fast approximate read is fine; a playback
-    // gain needs the real full-track loudness) ───────────────────────────────────────────────
+    // analyze() above, which stays capped at MAX_ANALYZE_SECONDS) ──────────────────────────────
+
+    /** Whole-track loudness and sample peak for normalization; see [measureLoudness]. */
+    data class Loudness(val integratedLufs: Float, val samplePeak: Float)
 
     /**
-     * Full-track integrated loudness per ITU-R BS.1770-4 / EBU R128: 400ms blocks at 100ms step
-     * (75% overlap), absolute gate at -70 LUFS, relative gate at (ungated mean - 10 LU). The
-     * un-gated [computeLufs] above skews quiet intros/outros and silence into the result; proper
-     * gating is what makes this value comparable across tracks for normalization.
+     * Full-track integrated loudness (ITU-R BS.1770-4 / EBU R128, gated) and sample peak, measured
+     * while decoding: each decoder output buffer is read in place straight into a [LoudnessMeter],
+     * so memory stays constant (~80 KB of sub-block energies per hour) however long the track is,
+     * and nothing is allocated per buffer. That matters because this runs in the background during
+     * a broadcast, and allocation churn in this process is exactly what once drove the snapserver
+     * into dryouts (see the FLAC decoder note in PlaybackService).
      *
-     * Decodes up to [MAX_GAIN_ANALYZE_SECONDS] of audio (not [analyze]'s 30s - a representative
-     * playback gain needs the real mix, not just the intro) using a pre-sized primitive
-     * FloatArray rather than [decodePcm]'s ArrayList<Float> - at this scale the latter would box
-     * tens of millions of Float objects (gigabytes of garbage), the same class of GC-pressure bug
-     * already found and fixed once in this codebase's FLAC decoder path. Meant to run once per
-     * track in the background (DownloadManager, at download-completion time), never synchronously
-     * on the UI thread. Returns null if the file can't be decoded.
+     * FLAC: the platform's c2.android.flac.decoder is the one whose buffer-pool churn caused that,
+     * so the standalone OMX.google.flac.decoder is tried first by name; where it is only an alias
+     * of the c2 component (or missing) the default decoder is used, still drained in place.
+     *
+     * Returns null if the file can't be decoded or has no gated loudness (e.g. digital silence).
      */
-    fun computeIntegratedLufs(path: String, mimeType: String?): Float? {
+    fun measureLoudness(path: String): Loudness? {
         if (!File(path).exists()) return null
         val extractor = MediaExtractor()
         var codec: MediaCodec? = null
         return try {
             extractor.setDataSource(path)
-            var trackIndex = -1
             var format: MediaFormat? = null
             for (i in 0 until extractor.trackCount) {
                 val f = extractor.getTrackFormat(i)
                 if (f.getString(MediaFormat.KEY_MIME)?.startsWith("audio/") == true) {
-                    trackIndex = i
+                    extractor.selectTrack(i)
                     format = f
                     break
                 }
             }
-            if (trackIndex < 0 || format == null) return null
-            extractor.selectTrack(trackIndex)
+            if (format == null) return null
             val mime = format.getString(MediaFormat.KEY_MIME) ?: return null
-            val sampleRate = if (format.containsKey(MediaFormat.KEY_SAMPLE_RATE)) {
-                format.getInteger(MediaFormat.KEY_SAMPLE_RATE)
-            } else {
-                44100
-            }
-            val channelCount = if (format.containsKey(MediaFormat.KEY_CHANNEL_COUNT)) {
-                format.getInteger(MediaFormat.KEY_CHANNEL_COUNT)
-            } else {
-                2
-            }
-            val maxSamples = sampleRate * MAX_GAIN_ANALYZE_SECONDS * channelCount
-
-            val pcm: FloatArray = if (mime == "audio/raw") {
+            val rate = if (format.containsKey(MediaFormat.KEY_SAMPLE_RATE)) format.getInteger(MediaFormat.KEY_SAMPLE_RATE) else 44100
+            val channels = if (format.containsKey(MediaFormat.KEY_CHANNEL_COUNT)) format.getInteger(MediaFormat.KEY_CHANNEL_COUNT) else 2
+            val meter = LoudnessMeter(rate, channels)
+            if (mime == "audio/raw") {
                 val encoding = runCatching { format.getInteger(MediaFormat.KEY_PCM_ENCODING) }
                     .getOrElse { AudioFormat.ENCODING_PCM_16BIT }
-                readRawPcmDirectUnboxed(extractor, maxSamples, encoding)
+                val buf = ByteBuffer.allocateDirect(65536).order(ByteOrder.nativeOrder())
+                while (true) {
+                    val n = extractor.readSampleData(buf, 0)
+                    if (n < 0) break
+                    buf.position(0).limit(n)
+                    feed(meter, buf, encoding)
+                    buf.clear()
+                    extractor.advance()
+                }
             } else {
-                codec = MediaCodec.createDecoderByType(mime)
-                codec.configure(format, null, null, 0)
-                codec.start()
-                decodePcmUnboxed(extractor, codec, maxSamples)
+                val c = createDecoder(mime).also { codec = it }
+                c.configure(format, null, null, 0)
+                c.start()
+                var encoding = AudioFormat.ENCODING_PCM_16BIT
+                val info = MediaCodec.BufferInfo()
+                var inputDone = false
+                var outputDone = false
+                while (!outputDone) {
+                    if (!inputDone) {
+                        val idx = c.dequeueInputBuffer(10_000L)
+                        if (idx >= 0) {
+                            val n = extractor.readSampleData(c.getInputBuffer(idx)!!, 0)
+                            if (n < 0) {
+                                c.queueInputBuffer(idx, 0, 0, 0, MediaCodec.BUFFER_FLAG_END_OF_STREAM)
+                                inputDone = true
+                            } else {
+                                c.queueInputBuffer(idx, 0, n, extractor.sampleTime, 0)
+                                extractor.advance()
+                            }
+                        }
+                    }
+                    when (val out = c.dequeueOutputBuffer(info, 10_000L)) {
+                        MediaCodec.INFO_OUTPUT_FORMAT_CHANGED -> {
+                            val of = c.outputFormat
+                            if (of.containsKey(MediaFormat.KEY_PCM_ENCODING)) encoding = of.getInteger(MediaFormat.KEY_PCM_ENCODING)
+                        }
+                        MediaCodec.INFO_TRY_AGAIN_LATER -> {}
+                        else -> if (out >= 0) {
+                            val buf = c.getOutputBuffer(out)!!.order(ByteOrder.nativeOrder())
+                            buf.position(info.offset).limit(info.offset + info.size)
+                            feed(meter, buf, encoding)
+                            c.releaseOutputBuffer(out, false)
+                            if (info.flags and MediaCodec.BUFFER_FLAG_END_OF_STREAM != 0) outputDone = true
+                        }
+                    }
+                }
             }
-            if (pcm.isEmpty()) return null
-            gatedIntegratedLufs(pcm, sampleRate, channelCount)
+            val r = meter.result()
+            r.integratedLufs?.let { Loudness(it, r.samplePeak) }
         } catch (e: Exception) {
-            null
-        } catch (e: OutOfMemoryError) {
-            // Defense-in-depth: the growable buffer in decodePcmUnboxed/readRawPcmDirectUnboxed
-            // is sized to avoid this, but this call runs unattended in the background
-            // (DownloadManager.triggerGainComputation, never awaited by playback) - an uncaught
-            // Error here would crash the whole app, not just skip one track's gain.
             null
         } finally {
             runCatching {
@@ -319,131 +327,21 @@ class AudioAnalyzer @Inject constructor() {
         }
     }
 
-    private fun gatedIntegratedLufs(samples: FloatArray, sampleRate: Int, channelCount: Int): Float {
-        val n = samples.size / channelCount.coerceAtLeast(1)
-        if (n == 0) return FLOOR_DB
-        val chsToProcess = channelCount.coerceAtMost(2) // L + R only (weight = 1.0 each), matches computeLufs
-        val weightedChannels = (0 until chsToProcess).map { ch ->
-            val chSamples = if (channelCount > 1) FloatArray(n) { i -> samples[i * channelCount + ch] } else samples
-            applyKWeighting(chSamples, sampleRate)
+    private fun feed(meter: LoudnessMeter, buf: ByteBuffer, encoding: Int) {
+        if (encoding == AudioFormat.ENCODING_PCM_FLOAT) {
+            while (buf.remaining() >= 4) meter.accept(buf.float)
+        } else {
+            while (buf.remaining() >= 2) meter.accept(buf.short / 32768f)
         }
-        val blockSize = (sampleRate * 0.4).toInt()
-        val stepSize = (sampleRate * 0.1).toInt()
-        if (blockSize <= 0 || n < blockSize) return singleBlockLufs(weightedChannels, n)
-
-        val blockPowers = ArrayList<Double>()
-        var start = 0
-        while (start + blockSize <= n) {
-            var sumSq = 0.0
-            for (chArr in weightedChannels) {
-                for (i in start until start + blockSize) {
-                    val s = chArr[i].toDouble()
-                    sumSq += s * s
-                }
-            }
-            blockPowers += sumSq / (blockSize * chsToProcess)
-            start += stepSize
-        }
-        // Absolute gate: -70 LUFS
-        val absoluteThreshold = 10.0.pow((-70.0 + 0.691) / 10.0)
-        val absoluteGated = blockPowers.filter { it > absoluteThreshold }
-        if (absoluteGated.isEmpty()) return -70f
-        val ungatedMean = absoluteGated.average()
-        if (ungatedMean <= 0.0) return -70f
-        // Relative gate: (ungated mean) - 10 LU
-        val relativeThresholdLufs = (-0.691 + 10 * log10(ungatedMean)) - 10.0
-        val relativeThreshold = 10.0.pow((relativeThresholdLufs + 0.691) / 10.0)
-        val relativeGated = absoluteGated.filter { it > relativeThreshold }
-        val finalMean = if (relativeGated.isNotEmpty()) relativeGated.average() else ungatedMean
-        return (-0.691 + 10 * log10(finalMean)).toFloat()
     }
 
-    private fun singleBlockLufs(weightedChannels: List<FloatArray>, n: Int): Float {
-        if (n == 0 || weightedChannels.isEmpty()) return FLOOR_DB
-        var sumSq = 0.0
-        for (chArr in weightedChannels) {
-            for (i in 0 until n) sumSq += chArr[i].toDouble() * chArr[i]
+    private fun createDecoder(mime: String): MediaCodec {
+        if (mime == MediaFormat.MIMETYPE_AUDIO_FLAC) {
+            runCatching { MediaCodec.createByCodecName("OMX.google.flac.decoder") }
+                .getOrNull()
+                ?.let { if (!it.name.startsWith("c2.")) return it else it.release() }
         }
-        val meanSq = sumSq / (n * weightedChannels.size)
-        return if (meanSq > 1e-12) (-0.691f + 10f * log10(meanSq.toFloat())) else FLOOR_DB
-    }
-
-    // Same decode loops as decodePcm/readRawPcmDirect below, but writing into a growable primitive
-    // FloatArray (doubling capacity as needed, starting small and capped at maxSamples) with a
-    // cursor instead of an ArrayList<Float> - see computeIntegratedLufs's doc for why boxing is
-    // unacceptable at full-track scale. Growable rather than pre-sized to maxSamples: eagerly
-    // allocating the full MAX_GAIN_ANALYZE_SECONDS (600s * 48kHz * 2ch * 4B ~= 230MB) regardless
-    // of the actual track length crashed with OutOfMemoryError on-device for an ordinary ~3 minute
-    // track (confirmed: this app's heap growth limit is ~384MB) - most tracks need a small
-    // fraction of the worst-case buffer. The stats-sheet analyze() path keeps using the boxed
-    // versions unchanged (fine at its much smaller 30s cap).
-    private fun decodePcmUnboxed(extractor: MediaExtractor, codec: MediaCodec, maxSamples: Int): FloatArray {
-        var out = FloatArray(minOf(maxSamples, INITIAL_GAIN_BUFFER_SAMPLES))
-        var cursor = 0
-        val info = MediaCodec.BufferInfo()
-        var inputDone = false
-        var outputDone = false
-        while (!outputDone && cursor < maxSamples) {
-            if (!inputDone) {
-                val idx = codec.dequeueInputBuffer(10_000L)
-                if (idx >= 0) {
-                    val buf = codec.getInputBuffer(idx)!!
-                    val n = extractor.readSampleData(buf, 0)
-                    if (n < 0) {
-                        codec.queueInputBuffer(idx, 0, 0, 0, MediaCodec.BUFFER_FLAG_END_OF_STREAM)
-                        inputDone = true
-                    } else {
-                        codec.queueInputBuffer(idx, 0, n, extractor.sampleTime, 0)
-                        extractor.advance()
-                    }
-                }
-            }
-            when (val outIdx = codec.dequeueOutputBuffer(info, 10_000L)) {
-                MediaCodec.INFO_OUTPUT_FORMAT_CHANGED, MediaCodec.INFO_TRY_AGAIN_LATER -> {}
-                else -> if (outIdx >= 0) {
-                    val buf = codec.getOutputBuffer(outIdx)!!.apply { order(ByteOrder.nativeOrder()) }
-                    val shortBuf = buf.asShortBuffer()
-                    var i = 0
-                    val remaining = shortBuf.remaining()
-                    while (i < remaining && cursor < maxSamples) {
-                        if (cursor >= out.size) out = out.copyOf(minOf(out.size * 2, maxSamples))
-                        out[cursor++] = shortBuf.get(i) / 32768f
-                        i++
-                    }
-                    codec.releaseOutputBuffer(outIdx, false)
-                    if (info.flags and MediaCodec.BUFFER_FLAG_END_OF_STREAM != 0) outputDone = true
-                }
-            }
-        }
-        return if (cursor == out.size) out else out.copyOf(cursor)
-    }
-
-    private fun readRawPcmDirectUnboxed(extractor: MediaExtractor, maxSamples: Int, encoding: Int): FloatArray {
-        var out = FloatArray(minOf(maxSamples, INITIAL_GAIN_BUFFER_SAMPLES))
-        var cursor = 0
-        val buf = ByteBuffer.allocateDirect(65536).order(ByteOrder.nativeOrder())
-        while (cursor < maxSamples) {
-            val n = extractor.readSampleData(buf, 0)
-            if (n < 0) break
-            buf.position(0).limit(n)
-            when (encoding) {
-                AudioFormat.ENCODING_PCM_FLOAT -> {
-                    while (buf.remaining() >= 4 && cursor < maxSamples) {
-                        if (cursor >= out.size) out = out.copyOf(minOf(out.size * 2, maxSamples))
-                        out[cursor++] = buf.float
-                    }
-                }
-                else -> {
-                    while (buf.remaining() >= 2 && cursor < maxSamples) {
-                        if (cursor >= out.size) out = out.copyOf(minOf(out.size * 2, maxSamples))
-                        out[cursor++] = buf.short / 32768f
-                    }
-                }
-            }
-            buf.clear()
-            extractor.advance()
-        }
-        return if (cursor == out.size) out else out.copyOf(cursor)
+        return MediaCodec.createDecoderByType(mime)
     }
 
     // ── LUFS (ITU-R BS.1770, ungated) ────────────────────────────────────────
@@ -468,25 +366,12 @@ class AudioAnalyzer @Inject constructor() {
     }
 
     private fun applyKWeighting(x: FloatArray, sampleRate: Int): FloatArray {
-        // Stage 1: pre-filter (high-shelf ~1682 Hz, +4 dB) - 48 kHz coefficients are
-        // a close approximation for 44.1–96 kHz; error < 0.1 LUFS for typical content
-        val b1 = doubleArrayOf(1.53512485958697, -2.69169618940638, 1.19839281085285)
-        val a1 = doubleArrayOf(-1.69065929318241, 0.73248077421585)
-
-        // Stage 2: RLB high-pass at 38.13506 Hz - computed exactly for this sample rate
-        val (b2, a2) = rlbHighPassCoeffs(sampleRate)
-
-        val stage1 = biquadFilter(x, b1, a1)
-        return biquadFilter(stage1, b2, a2)
-    }
-
-    private fun rlbHighPassCoeffs(sampleRate: Int): Pair<DoubleArray, DoubleArray> {
-        val k = tan(PI * 38.13506 / sampleRate)
-        val q = 1.0 / sqrt(2.0)
-        val d = 1.0 + k / q + k * k
-        val b = doubleArrayOf(1.0 / d, -2.0 / d, 1.0 / d)
-        val a = doubleArrayOf(2.0 * (k * k - 1.0) / d, (1.0 - k / q + k * k) / d)
-        return b to a
+        // Same BS.1770 coefficients as the normalization path (KWeighting, derived from the rate),
+        // so the stats sheet and the playback gain agree on a track's loudness.
+        val shelf = KWeighting.shelf(sampleRate)
+        val highPass = KWeighting.highPass(sampleRate)
+        val stage1 = biquadFilter(x, doubleArrayOf(shelf.b0, shelf.b1, shelf.b2), doubleArrayOf(shelf.a1, shelf.a2))
+        return biquadFilter(stage1, doubleArrayOf(highPass.b0, highPass.b1, highPass.b2), doubleArrayOf(highPass.a1, highPass.a2))
     }
 
     private fun biquadFilter(x: FloatArray, b: DoubleArray, a: DoubleArray): FloatArray {

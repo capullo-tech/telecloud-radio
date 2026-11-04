@@ -38,21 +38,19 @@ class DownloadManager @Inject constructor(
 ) {
     private val downloadedFiles = LinkedHashMap<Long, String>()
 
-    // Background gain computation (readReplayGainDb / computeIntegratedLufs) must never block or
-    // be cancelled by a caller's own coroutine (ensureDownloaded is awaited by playTrack, which
-    // must return as soon as the FILE is ready - not after a potentially multi-second full-track
-    // loudness analysis). A SupervisorJob-rooted scope outlives any one playlist mutation's
-    // cancellation (e.g. prefetchJob?.cancel() on a reorder), matching the "once downloaded, the
-    // gain still gets computed regardless of what the user does next" semantics.
+    // Background gain computation must never block or be cancelled by a caller's own coroutine
+    // (ensureDownloaded is awaited by playTrack, which must return as soon as the FILE is ready,
+    // not after a full-track loudness pass). A SupervisorJob-rooted scope outlives any one playlist
+    // mutation's cancellation, so a downloaded track still gets its gain whatever the user does next.
     private val gainScope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
 
-    // Serializes gain computation: ensureDownloaded can trigger it for several tracks close
-    // together (fresh download + prefetchAhead's current-plus-2 window all landing around the
-    // same time), and each computeIntegratedLufs call holds a large decode buffer (tens of MB,
-    // see AudioAnalyzer's growable-buffer doc). Running them concurrently was observed on-device
-    // to compound into repeated OutOfMemoryError (caught, but still unnecessary memory pressure
-    // and GC thrashing) - one at a time keeps peak usage to a single track's buffer.
+    // One analysis at a time: each is a full decode, and several tracks can land together (the
+    // prefetch window). Memory is constant per analysis now; this bounds CPU next to a broadcast.
     private val gainSemaphore = Semaphore(1)
+
+    // Tracks whose gain is being computed, so repeated ensureDownloaded calls don't queue the same
+    // file twice. Touched only from gainScope coroutines and ensureDownloaded; synchronized on itself.
+    private val gainInFlight = HashSet<Long>()
 
     // messageId → 0f..1f for downloads currently in flight
     private val _downloadProgress = MutableStateFlow<Map<Long, Float>>(emptyMap())
@@ -112,40 +110,42 @@ class DownloadManager @Inject constructor(
 
     // Computes and persists this track's normalization gain in the background if not already
     // known - called from every success path in ensureDownloaded (not just fresh downloads) so
-    // tracks cached before this feature existed get covered too. Idempotent: the DB check inside
-    // gainScope.launch means calling this repeatedly (e.g. on every replay of an already-cached
-    // track) costs one cheap SELECT after the first computation lands.
+    // tracks cached before this feature existed get covered too. A row is written even when the
+    // analysis fails (source FAILED, unity gain) so an undecodable file isn't retried on every play.
     private fun triggerGainComputation(messageId: Long, path: String) {
+        if (!synchronized(gainInFlight) { gainInFlight.add(messageId) }) return
         gainScope.launch {
-            if (trackGainDao.get(messageId) != null) return@launch
-            val tagDb = withContext(Dispatchers.IO) { audioMetadataReader.readReplayGainDb(path) }
-            val (gainDb, measuredLufs, source) = if (tagDb != null) {
-                // The tag IS the gain already (no decode needed) - ReplayGain 2.0 taggers target
-                // -18 LUFS, so back-compute an implied loudness for the stats/diagnostics field
-                // only; it is never used to derive gainDb when a tag is present.
-                Triple(tagDb, TARGET_LUFS - tagDb, "REPLAYGAIN_TAG")
-            } else {
-                val measured = gainSemaphore.withPermit {
-                    audioAnalyzer.computeIntegratedLufs(path, null)
-                } ?: return@launch
-                Triple(TARGET_LUFS - measured, measured, "COMPUTED_LUFS")
+            try {
+                if (trackGainDao.get(messageId) != null) return@launch
+                gainSemaphore.withPermit {
+                    if (trackGainDao.get(messageId) != null) return@withPermit
+                    trackGainDao.insert(computeGain(messageId, path))
+                }
+            } finally {
+                synchronized(gainInFlight) { gainInFlight.remove(messageId) }
             }
-            // Positive gain without a true-peak limiter risks clipping on the loudest samples of
-            // an already-quiet track, so it is capped conservatively; negative gain (turning a
-            // loud track down) never clips, so it is allowed much further.
-            val clampedDb = gainDb.coerceIn(-24f, 6f)
-            val gainLinear = 10f.pow(clampedDb / 20f)
-            trackGainDao.insert(
-                TrackGainEntity(
-                    messageId = messageId,
-                    gainLinear = gainLinear,
-                    measuredLufs = measuredLufs,
-                    source = source,
-                    computedAt = System.currentTimeMillis(),
-                ),
-            )
         }
     }
+
+    private suspend fun computeGain(messageId: Long, path: String): TrackGainEntity {
+        val tag = withContext(Dispatchers.IO) { audioMetadataReader.readReplayGain(path) }
+        val (gainDb, peak, measuredLufs, source) = if (tag != null) {
+            // The tag IS the gain (no decode needed). ReplayGain 2.0 taggers target -18 LUFS, so
+            // the implied loudness is only a diagnostic; it never drives the gain.
+            GainInputs(tag.gainDb, tag.peak, TARGET_LUFS - tag.gainDb, "REPLAYGAIN_TAG")
+        } else {
+            val l = withContext(Dispatchers.IO) { audioAnalyzer.measureLoudness(path) }
+                ?: return TrackGainEntity(messageId, 1f, Float.NaN, "FAILED", System.currentTimeMillis())
+            GainInputs(TARGET_LUFS - l.integratedLufs, l.samplePeak, l.integratedLufs, "COMPUTED_LUFS")
+        }
+        // Loud tracks may come down a long way; quiet ones go up at most +6 dB, and never so far
+        // that their sample peak passes ~-1 dBFS (GainAudioProcessor hard-clips).
+        var gainLinear = 10f.pow(gainDb.coerceIn(-24f, 6f) / 20f)
+        if (peak != null && peak > 0f && gainLinear > 1f) gainLinear = minOf(gainLinear, maxOf(1f, PEAK_CEILING / peak))
+        return TrackGainEntity(messageId, gainLinear, measuredLufs, source, System.currentTimeMillis())
+    }
+
+    private data class GainInputs(val gainDb: Float, val peak: Float?, val measuredLufs: Float, val source: String)
 
     fun getCachedPath(messageId: Long): String? = downloadedFiles[messageId]?.takeIf { File(it).exists() }
 
@@ -211,7 +211,10 @@ class DownloadManager @Inject constructor(
     private companion object {
         // ReplayGain 2.0's reference level - matches what modern taggers (and the
         // REPLAYGAIN_TRACK_GAIN tags they write) target, so a tag-derived gain and a
-        // computeIntegratedLufs-derived gain land library tracks at the same loudness.
+        // measured gain land library tracks at the same loudness.
         const val TARGET_LUFS = -18f
+
+        // Max sample peak after gain (~-1 dBFS).
+        const val PEAK_CEILING = 0.89f
     }
 }

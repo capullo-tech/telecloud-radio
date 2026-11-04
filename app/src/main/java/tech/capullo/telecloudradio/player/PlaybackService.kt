@@ -33,6 +33,7 @@ import androidx.media3.session.MediaSessionService
 import dagger.hilt.android.AndroidEntryPoint
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.currentCoroutineContext
@@ -96,6 +97,7 @@ class PlaybackService : MediaSessionService() {
     private var mediaSession: MediaSession? = null
     private val balanceProcessor = BalanceAudioProcessor()
     private val gainProcessor = GainAudioProcessor()
+    private var gainJob: Job? = null
     private var fifoSink: FifoAudioBufferSink? = null
     private val serviceScope = CoroutineScope(SupervisorJob() + Dispatchers.Main)
 
@@ -566,17 +568,16 @@ class PlaybackService : MediaSessionService() {
                 // Fires for the gapless addMediaItem advance as well as explicit setMediaItem jumps.
                 trackStartedElapsedMs = SystemClock.elapsedRealtime()
                 silenceSkipFiredForItem = false
-                // Apply its stored normalization gain: unity until the lookup lands, and for a
-                // track never analyzed. The mediaId re-check drops a lookup that lands after the
-                // player has already moved on.
-                val messageId = mediaItem?.mediaId?.toLongOrNull()
+                // Apply its stored normalization gain: unity until the row exists (never analyzed,
+                // or analysis still running), then the stored value as soon as it is written, so a
+                // freshly downloaded track is corrected mid-play rather than only on its next play.
+                // The observer is replaced on every transition, so a late row can't touch the next item.
+                gainJob?.cancel()
                 gainProcessor.gain = 1f
+                val messageId = mediaItem?.mediaId?.toLongOrNull()
                 if (messageId != null) {
-                    serviceScope.launch {
-                        val row = trackGainDao.get(messageId)
-                        if (player.currentMediaItem?.mediaId == mediaItem.mediaId) {
-                            gainProcessor.gain = row?.gainLinear ?: 1f
-                        }
+                    gainJob = serviceScope.launch {
+                        trackGainDao.observe(messageId).collect { row -> gainProcessor.gain = row?.gainLinear ?: 1f }
                     }
                 }
             }
