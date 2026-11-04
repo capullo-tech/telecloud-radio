@@ -522,12 +522,19 @@ class PlaybackService : MediaSessionService() {
                     // deadlocks - the 64KB pipe has no reader yet and a blocked
                     // tee stalls READY forever.
                     fifoSink?.enableWrites()
+                    // Release whatever was held since the pause, faded in.
+                    fifoSink?.resumeOutput()
                     snapcastManager.startBroadcast(snapNowPlaying, snapController)
                     // Explicit play (also an app-switch back to us): reclaim audio focus so the
                     // other broadcasting app's local snapclient is evicted and only this device
                     // is audible. startBroadcast() no-ops after the first play, so this is the
                     // only re-request on a subsequent resume.
                     snapcastManager.reclaimAudioFocus()
+                } else {
+                    // ExoPlayer keeps draining a few hundred ms of PCM into the tee after a pause;
+                    // reaching snapserver after it has gone idle, those bursts flip the stream back
+                    // to playing and every speaker plays a fragment. Fade out and hold them instead.
+                    fifoSink?.pauseOutput()
                 }
                 publishNowPlaying()
             }
