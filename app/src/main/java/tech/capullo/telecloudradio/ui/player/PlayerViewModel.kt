@@ -2,7 +2,6 @@ package tech.capullo.telecloudradio.ui.player
 
 import android.content.ComponentName
 import android.content.Context
-import android.content.Intent
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
 import android.media.MediaMetadataRetriever
@@ -159,13 +158,6 @@ class PlayerViewModel @Inject constructor(
     private var enqueuedNextIndex: Int? = null
     private var enqueueJob: Job? = null
 
-    // One-shot per item: set by maybeBeginCrossfade once it has fired ACTION_BEGIN_CROSSFADE for
-    // the current track, so the 500ms position loop doesn't resend it every tick. Reset wherever
-    // the "current track" identity changes (playTrack's explicit jump, onGaplessAdvance) and
-    // whenever syncEnqueuedNext retargets enqueuedNextIndex to a different track - an armed fade
-    // is only valid for the specific next-track it was started for.
-    private var crossfadeArmedForItem = false
-
     // Set when the countdown hit zero mid-track: playback finishes the current
     // track, then onTrackEnded pauses instead of advancing.
     private var sleepAtTrackEnd = false
@@ -212,7 +204,6 @@ class PlayerViewModel @Inject constructor(
                 when (cmd) {
                     PlaybackCommand.NEXT -> nextTrack()
                     PlaybackCommand.PREV -> prevTrack()
-                    PlaybackCommand.GAPLESS_ADVANCED -> onGaplessAdvance()
                 }
             }
         }
@@ -717,38 +708,9 @@ class PlayerViewModel @Inject constructor(
                 PerfTrace.section("VM.positionTick") {
                     _positionState.value = controller?.currentPosition ?: 0L
                 }
-                maybeBeginCrossfade()
                 delay(500L)
             }
         }
-    }
-
-    // Fires PlaybackService.ACTION_BEGIN_CROSSFADE once per item, when the staged next track
-    // (enqueuedNextIndex - same selection as plain gapless, see syncEnqueuedNext) is close enough
-    // to the current track's end to start prerolling. CROSSFADE_TRIGGER_MS = fade length + preroll
-    // slack, so the secondary player should already be at STATE_READY by the time the fade window
-    // (the trailing CROSSFADE_DURATION_MS) actually begins. Not a hard guarantee - a slow decode
-    // or disk read can still push the fade start later; PlaybackService.beginCrossfade() is
-    // idempotent per uri and the existing plain-gapless addMediaItem stays wired as a fallback
-    // (syncEnqueuedNext still runs), so a late/failed crossfade degrades to a normal gapless
-    // transition instead of a broken one.
-    private fun maybeBeginCrossfade() {
-        if (crossfadeArmedForItem) return
-        val duration = _uiState.value.trackDuration
-        if (duration <= 0L) return
-        if (duration - _positionState.value > CROSSFADE_TRIGGER_MS) return
-        val target = enqueuedNextIndex ?: return
-        val track = playlist.getOrNull(target) ?: return
-        val path = downloadManager.getCachedPath(track.messageId) ?: return
-        crossfadeArmedForItem = true
-        context.startService(
-            Intent(context, PlaybackService::class.java).apply {
-                action = PlaybackService.ACTION_BEGIN_CROSSFADE
-                putExtra(PlaybackService.EXTRA_URI, Uri.fromFile(File(path)).toString())
-                putExtra(PlaybackService.EXTRA_MESSAGE_ID, track.messageId)
-                putExtra(PlaybackService.EXTRA_DURATION_MS, CROSSFADE_DURATION_MS)
-            },
-        )
     }
 
     fun toggleSleepTimer() {
@@ -839,7 +801,6 @@ class PlayerViewModel @Inject constructor(
         enqueueJob?.cancel()
         controller?.let { if (it.mediaItemCount > 1) it.removeMediaItem(1) }
         enqueuedNextIndex = null
-        crossfadeArmedForItem = false
         if (target == null || target !in playlist.indices) return
         val track = playlist[target]
         enqueueJob = viewModelScope.launch {
@@ -884,7 +845,6 @@ class PlayerViewModel @Inject constructor(
         val track = playlist.getOrNull(index) ?: return
         val path = downloadManager.getCachedPath(track.messageId) ?: return
         enqueuedNextIndex = null
-        crossfadeArmedForItem = false
         currentIndex = index
         downloadManager.activeMessageId = track.messageId
         viewModelScope.launch {
@@ -1254,7 +1214,6 @@ class PlayerViewModel @Inject constructor(
         // setMediaItem replaces the whole controller queue (including any item staged by a
         // previous syncEnqueuedNext) with just this one - drop the stale tracking var to match.
         enqueuedNextIndex = null
-        crossfadeArmedForItem = false
         enqueueJob?.cancel()
         controller?.apply {
             setMediaItem(
@@ -1459,14 +1418,5 @@ class PlayerViewModel @Inject constructor(
         // vanish the moment you left the player. activePlayback is app-scoped state that must
         // outlive this screen; it is cleared when playback truly stops (PlaybackService.onDestroy).
         super.onCleared()
-    }
-
-    private companion object {
-        // Fade length and the lead time (fade + preroll slack) before a track's end at which
-        // maybeBeginCrossfade fires - see its doc. Kept here rather than PlaybackService's
-        // DEFAULT_CROSSFADE_DURATION_MS because the trigger threshold needs preroll slack on top
-        // of the fade length, which is a VM-side (position-loop) concern, not the service's.
-        const val CROSSFADE_DURATION_MS = 4000L
-        const val CROSSFADE_TRIGGER_MS = 5500L
     }
 }

@@ -10,12 +10,7 @@ import tech.capullo.telecloudradio.data.db.MediaMessageEntity
 import javax.inject.Inject
 import javax.inject.Singleton
 
-// GAPLESS_ADVANCED: emitted by PlaybackService once a crossfade handoff completes (the new
-// player is now the audible one) - PlayerViewModel's handler is the same state-sync code path
-// ExoPlayer's own native gapless auto-advance uses (see PlayerViewModel.onGaplessAdvance),
-// because from the VM's perspective both cases are identical: "the staged next track is now
-// actually playing, sync currentIndex/UI/metadata to it."
-enum class PlaybackCommand { NEXT, PREV, GAPLESS_ADVANCED }
+enum class PlaybackCommand { NEXT, PREV }
 
 data class ActivePlayback(
     val track: MediaMessageEntity,
