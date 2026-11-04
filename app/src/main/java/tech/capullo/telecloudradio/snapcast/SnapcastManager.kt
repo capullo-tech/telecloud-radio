@@ -1,6 +1,7 @@
 package tech.capullo.telecloudradio.snapcast
 
 import android.content.Context
+import android.os.SystemClock
 import android.util.Base64
 import android.util.Log
 import dagger.hilt.android.qualifiers.ApplicationContext
@@ -528,7 +529,6 @@ class SnapcastManager @Inject constructor(
      * runs them.
      */
     private fun launchSnapclientProcess(host: String, port: Int) {
-        val channel = _state.value.snapclientChannel
         val sc = SnapclientProcess(context).also { snapclientProcess = it }
         snapclientStateJob = scope.launch {
             sc.connectionState.collect { s -> _state.update { it.copy(listenState = s) } }
@@ -536,8 +536,17 @@ class SnapcastManager @Inject constructor(
         snapclientJob = scope.launch {
             var backoffMs = SNAPCLIENT_RETRY_MIN_MS
             while (isActive) {
-                sc.start(host, port, channel)
+                // Re-read every launch: live channel changes (setLocalChannel, changeClientChannel,
+                // syncLocalChannelFromName) only update state + the running client's socket, so a
+                // value captured once would relaunch an L/R pair on its pre-change channel.
+                val startedAt = SystemClock.elapsedRealtime()
+                sc.start(host, port, _state.value.snapclientChannel)
                 if (!isActive) break
+                // A run that outlived the max backoff was healthy: the next fault is a fresh one-off
+                // and gets the short delay again rather than inheriting a long session's backoff.
+                if (SystemClock.elapsedRealtime() - startedAt >= SNAPCLIENT_RETRY_MAX_MS) {
+                    backoffMs = SNAPCLIENT_RETRY_MIN_MS
+                }
                 Log.w(TAG, "local snapclient exited on its own - restarting in ${backoffMs}ms")
                 delay(backoffMs)
                 backoffMs = (backoffMs * 2).coerceAtMost(SNAPCLIENT_RETRY_MAX_MS)
