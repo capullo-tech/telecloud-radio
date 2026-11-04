@@ -150,7 +150,7 @@ class SnapcastManager @Inject constructor(
 
     // --- Shared (broadcast local playback / listen-in) ---
 
-    private var snapclientProcess: SnapclientProcess? = null
+    @Volatile private var snapclientProcess: SnapclientProcess? = null
     private var snapclientJob: Job? = null
     private var snapclientStateJob: Job? = null
     private var controlClient: SnapcastControlClient? = null
@@ -496,12 +496,14 @@ class SnapcastManager @Inject constructor(
         // stopped (broadcast continues); on regain it's restarted with the same host/port.
         val focus = audioFocus ?: AudioFocusController(
             context,
-            onPause = { scope.launch { destroySnapclientProcess() } },
+            // Run inline: AudioFocusController already calls these on the main thread, which is
+            // where every other start/stop of the client runs. Hopping to Dispatchers.IO let a
+            // pause race a concurrent launch and destroy a client whose supervisor job hadn't been
+            // stored yet, so that supervisor kept restarting it over the app that took the speaker.
+            onPause = { destroySnapclientProcess() },
             onResume = {
-                scope.launch {
-                    val h = currentSnapclientHost
-                    if (h != null && snapclientProcess == null) launchSnapclientProcess(h, currentSnapclientPort)
-                }
+                val h = currentSnapclientHost
+                if (h != null && snapclientProcess == null) launchSnapclientProcess(h, currentSnapclientPort)
             },
         ).also { audioFocus = it }
         focus.request()
@@ -514,7 +516,6 @@ class SnapcastManager @Inject constructor(
      * returned normally, this job simply completed, and [snapclientProcess] stayed non-null so even
      * the focus-regain path's `snapclientProcess == null` guard refused to act. The device then
      * played nothing while the broadcast carried on to every remote listener, with no UI trace.
-     * Measured on QuantumCast, which had the identical gap: silent for 1h50m before anyone noticed.
      *
      * THE TRAP THIS AVOIDS. [destroySnapclientProcess] stops the client with `destroyForcibly()`,
      * which from inside `start()` looks exactly like a crash. A supervisor keyed on "the process is
@@ -523,10 +524,9 @@ class SnapcastManager @Inject constructor(
      * So the signal is the JOB: [destroySnapclientProcess] cancels this coroutine before destroying
      * the process, so `isActive` is already false when `start()` returns and the loop ends.
      *
-     * That ordering holds even though this manager's focus callbacks hop through
-     * `scope.launch` on [Dispatchers.IO]: cancel and destroy are both inside
-     * [destroySnapclientProcess], so they stay ordered with respect to each other whichever thread
-     * runs them.
+     * Every start and stop of the client runs on the main thread (the focus callbacks included),
+     * so a supervisor can't be left running for a client that was already replaced; as a backstop
+     * it also quits as soon as [snapclientProcess] no longer points at its own client.
      */
     private fun launchSnapclientProcess(host: String, port: Int) {
         val sc = SnapclientProcess(context).also { snapclientProcess = it }
@@ -535,13 +535,13 @@ class SnapcastManager @Inject constructor(
         }
         snapclientJob = scope.launch {
             var backoffMs = SNAPCLIENT_RETRY_MIN_MS
-            while (isActive) {
+            while (isActive && snapclientProcess === sc) {
                 // Re-read every launch: live channel changes (setLocalChannel, changeClientChannel,
                 // syncLocalChannelFromName) only update state + the running client's socket, so a
                 // value captured once would relaunch an L/R pair on its pre-change channel.
                 val startedAt = SystemClock.elapsedRealtime()
                 sc.start(host, port, _state.value.snapclientChannel)
-                if (!isActive) break
+                if (!isActive || snapclientProcess !== sc) break
                 // A run that outlived the max backoff was healthy: the next fault is a fresh one-off
                 // and gets the short delay again rather than inheriting a long session's backoff.
                 if (SystemClock.elapsedRealtime() - startedAt >= SNAPCLIENT_RETRY_MAX_MS) {
