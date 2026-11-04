@@ -538,6 +538,11 @@ class PlaybackService : MediaSessionService() {
                 // watchdog - observed on-device as "file appears corrupt, skipping" immediately
                 // after a normal gapless transition.
                 if (crossfadeTargetUri != null) {
+                    // End the fade too, not just the job: if this lands mid-fade (Next/Prev/tap
+                    // inside the window, or a late preroll losing to auto-advance) the mixer would
+                    // otherwise keep ducking the new track toward silence with a dead incoming
+                    // queue for the rest of the window, then jump back to full level.
+                    crossfadeMixer?.endFade()
                     fadeJob?.cancel()
                     fadeJob = null
                     secondaryPlayer?.release()
