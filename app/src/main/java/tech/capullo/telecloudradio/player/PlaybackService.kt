@@ -29,6 +29,7 @@ import androidx.media3.session.MediaSessionService
 import dagger.hilt.android.AndroidEntryPoint
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.currentCoroutineContext
@@ -89,6 +90,7 @@ class PlaybackService : MediaSessionService() {
     private var mediaSession: MediaSession? = null
     private val balanceProcessor = BalanceAudioProcessor()
     private var fifoSink: FifoAudioBufferSink? = null
+    private var releaseSpeakerJob: Job? = null
     private val serviceScope = CoroutineScope(SupervisorJob() + Dispatchers.Main)
 
     // --- Acoustic sync calibration ---
@@ -535,7 +537,18 @@ class PlaybackService : MediaSessionService() {
                 // steal the speaker from whoever the user had since handed it to. Bringing the app
                 // to the foreground reclaims separately (MainActivity.onStart).
                 if (playWhenReady && reason == Player.PLAY_WHEN_READY_CHANGE_REASON_USER_REQUEST) {
-                    snapcastManager.reclaimAudioFocus()
+                    snapcastManager.reclaimAudioFocus(fromPlay = true)
+                }
+                // Paused long enough: give the speaker back (focus + local snapclient) so a paused
+                // TC neither blocks nor later auto-resumes over another app. The broadcast stays up.
+                releaseSpeakerJob?.cancel()
+                releaseSpeakerJob = if (playWhenReady) {
+                    null
+                } else {
+                    serviceScope.launch {
+                        delay(RELEASE_SPEAKER_AFTER_PAUSE_MS)
+                        snapcastManager.releaseSpeaker()
+                    }
                 }
             }
         })
@@ -711,5 +724,8 @@ class PlaybackService : MediaSessionService() {
         // buffering / short silent intros while still cutting a dead track quickly.
         private const val WATCHDOG_TICK_MS = 1000L
         private const val SILENT_SKIP_MS = 8000L
+
+        // How long playback stays paused before the local speaker is released.
+        private const val RELEASE_SPEAKER_AFTER_PAUSE_MS = 30_000L
     }
 }
