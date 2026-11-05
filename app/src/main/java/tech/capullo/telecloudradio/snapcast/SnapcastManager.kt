@@ -1,6 +1,7 @@
 package tech.capullo.telecloudradio.snapcast
 
 import android.content.Context
+import android.os.SystemClock
 import android.util.Base64
 import android.util.Log
 import dagger.hilt.android.qualifiers.ApplicationContext
@@ -8,10 +9,12 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
+import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import tech.capullo.audio.contracts.NowPlaying
 import tech.capullo.audio.contracts.PlaybackController
@@ -147,7 +150,7 @@ class SnapcastManager @Inject constructor(
 
     // --- Shared (broadcast local playback / listen-in) ---
 
-    private var snapclientProcess: SnapclientProcess? = null
+    @Volatile private var snapclientProcess: SnapclientProcess? = null
     private var snapclientJob: Job? = null
     private var snapclientStateJob: Job? = null
     private var controlClient: SnapcastControlClient? = null
@@ -493,24 +496,62 @@ class SnapcastManager @Inject constructor(
         // stopped (broadcast continues); on regain it's restarted with the same host/port.
         val focus = audioFocus ?: AudioFocusController(
             context,
-            onPause = { scope.launch { destroySnapclientProcess() } },
+            // Run inline: AudioFocusController already calls these on the main thread, which is
+            // where every other start/stop of the client runs. Hopping to Dispatchers.IO let a
+            // pause race a concurrent launch and destroy a client whose supervisor job hadn't been
+            // stored yet, so that supervisor kept restarting it over the app that took the speaker.
+            onPause = { destroySnapclientProcess() },
             onResume = {
-                scope.launch {
-                    val h = currentSnapclientHost
-                    if (h != null && snapclientProcess == null) launchSnapclientProcess(h, currentSnapclientPort)
-                }
+                val h = currentSnapclientHost
+                if (h != null && snapclientProcess == null) launchSnapclientProcess(h, currentSnapclientPort)
             },
         ).also { audioFocus = it }
         focus.request()
     }
 
+    /**
+     * Start the local snapclient and keep it running until somebody actually asks it to stop.
+     *
+     * `libsnapclient.so` can exit on its own, and nothing used to notice: [SnapclientProcess.start]
+     * returned normally, this job simply completed, and [snapclientProcess] stayed non-null so even
+     * the focus-regain path's `snapclientProcess == null` guard refused to act. The device then
+     * played nothing while the broadcast carried on to every remote listener, with no UI trace.
+     *
+     * THE TRAP THIS AVOIDS. [destroySnapclientProcess] stops the client with `destroyForcibly()`,
+     * which from inside `start()` looks exactly like a crash. A supervisor keyed on "the process is
+     * gone" would restart the client the instant [AudioFocusController] paused it and play over
+     * whatever app just took the speaker, which is the behaviour that controller exists to prevent.
+     * So the signal is the JOB: [destroySnapclientProcess] cancels this coroutine before destroying
+     * the process, so `isActive` is already false when `start()` returns and the loop ends.
+     *
+     * Every start and stop of the client runs on the main thread (the focus callbacks included),
+     * so a supervisor can't be left running for a client that was already replaced; as a backstop
+     * it also quits as soon as [snapclientProcess] no longer points at its own client.
+     */
     private fun launchSnapclientProcess(host: String, port: Int) {
-        val channel = _state.value.snapclientChannel
         val sc = SnapclientProcess(context).also { snapclientProcess = it }
         snapclientStateJob = scope.launch {
             sc.connectionState.collect { s -> _state.update { it.copy(listenState = s) } }
         }
-        snapclientJob = scope.launch { sc.start(host, port, channel) }
+        snapclientJob = scope.launch {
+            var backoffMs = SNAPCLIENT_RETRY_MIN_MS
+            while (isActive && snapclientProcess === sc) {
+                // Re-read every launch: live channel changes (setLocalChannel, changeClientChannel,
+                // syncLocalChannelFromName) only update state + the running client's socket, so a
+                // value captured once would relaunch an L/R pair on its pre-change channel.
+                val startedAt = SystemClock.elapsedRealtime()
+                sc.start(host, port, _state.value.snapclientChannel)
+                if (!isActive || snapclientProcess !== sc) break
+                // A run that outlived the max backoff was healthy: the next fault is a fresh one-off
+                // and gets the short delay again rather than inheriting a long session's backoff.
+                if (SystemClock.elapsedRealtime() - startedAt >= SNAPCLIENT_RETRY_MAX_MS) {
+                    backoffMs = SNAPCLIENT_RETRY_MIN_MS
+                }
+                Log.w(TAG, "local snapclient exited on its own - restarting in ${backoffMs}ms")
+                delay(backoffMs)
+                backoffMs = (backoffMs * 2).coerceAtMost(SNAPCLIENT_RETRY_MAX_MS)
+            }
+        }
     }
 
     private fun destroySnapclientProcess() {
@@ -720,6 +761,12 @@ class SnapcastManager @Inject constructor(
 
     companion object {
         private const val TAG = "SnapcastManager"
+
+        /** Backoff bounds for restarting a local snapclient that exited on its own. Starts short
+         *  so a one-off native fault is inaudible, and caps so a genuinely broken target (server
+         *  gone, host unroutable) keeps retrying without spinning. */
+        private const val SNAPCLIENT_RETRY_MIN_MS = 1_000L
+        private const val SNAPCLIENT_RETRY_MAX_MS = 30_000L
 
         /** The Snapcast stream `name=` identity for this app (web player + snapclients). */
         private const val STREAM_NAME = "TelecloudRadio"
