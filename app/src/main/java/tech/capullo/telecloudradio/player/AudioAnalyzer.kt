@@ -4,6 +4,7 @@ import android.media.AudioFormat
 import android.media.MediaCodec
 import android.media.MediaExtractor
 import android.media.MediaFormat
+import android.os.Build
 import tech.capullo.audio.player.KWeighting
 import java.io.File
 import java.nio.ByteBuffer
@@ -263,7 +264,10 @@ class AudioAnalyzer @Inject constructor() {
             val mime = format.getString(MediaFormat.KEY_MIME) ?: return null
             val rate = if (format.containsKey(MediaFormat.KEY_SAMPLE_RATE)) format.getInteger(MediaFormat.KEY_SAMPLE_RATE) else 44100
             val channels = if (format.containsKey(MediaFormat.KEY_CHANNEL_COUNT)) format.getInteger(MediaFormat.KEY_CHANNEL_COUNT) else 2
-            val meter = LoudnessMeter(rate, channels)
+            // Mono is measured as the chain broadcasts it: ChannelMixingAudioProcessor copies it at
+            // unity into L and R, so it is metered as two identical channels.
+            var monoUpmix = channels == 1
+            var meter = LoudnessMeter(rate, if (monoUpmix) 2 else channels)
             if (mime == "audio/raw") {
                 val encoding = runCatching { format.getInteger(MediaFormat.KEY_PCM_ENCODING) }
                     .getOrElse { AudioFormat.ENCODING_PCM_16BIT }
@@ -272,7 +276,7 @@ class AudioAnalyzer @Inject constructor() {
                     val n = extractor.readSampleData(buf, 0)
                     if (n < 0) break
                     buf.position(0).limit(n)
-                    feed(meter, buf, encoding)
+                    feed(meter, buf, encoding, monoUpmix)
                     buf.clear()
                     extractor.advance()
                 }
@@ -300,14 +304,21 @@ class AudioAnalyzer @Inject constructor() {
                     }
                     when (val out = c.dequeueOutputBuffer(info, 10_000L)) {
                         MediaCodec.INFO_OUTPUT_FORMAT_CHANGED -> {
+                            // The decoder's real output can differ from the container (HE-AAC SBR
+                            // doubles the rate, PS turns mono into stereo). Always delivered before
+                            // the first output buffer, so nothing has been fed yet.
                             val of = c.outputFormat
                             if (of.containsKey(MediaFormat.KEY_PCM_ENCODING)) encoding = of.getInteger(MediaFormat.KEY_PCM_ENCODING)
+                            val outRate = if (of.containsKey(MediaFormat.KEY_SAMPLE_RATE)) of.getInteger(MediaFormat.KEY_SAMPLE_RATE) else rate
+                            val outChannels = if (of.containsKey(MediaFormat.KEY_CHANNEL_COUNT)) of.getInteger(MediaFormat.KEY_CHANNEL_COUNT) else channels
+                            monoUpmix = outChannels == 1
+                            meter = LoudnessMeter(outRate, if (monoUpmix) 2 else outChannels)
                         }
                         MediaCodec.INFO_TRY_AGAIN_LATER -> {}
                         else -> if (out >= 0) {
                             val buf = c.getOutputBuffer(out)!!.order(ByteOrder.nativeOrder())
                             buf.position(info.offset).limit(info.offset + info.size)
-                            feed(meter, buf, encoding)
+                            feed(meter, buf, encoding, monoUpmix)
                             c.releaseOutputBuffer(out, false)
                             if (info.flags and MediaCodec.BUFFER_FLAG_END_OF_STREAM != 0) outputDone = true
                         }
@@ -327,11 +338,18 @@ class AudioAnalyzer @Inject constructor() {
         }
     }
 
-    private fun feed(meter: LoudnessMeter, buf: ByteBuffer, encoding: Int) {
+    private fun feed(meter: LoudnessMeter, buf: ByteBuffer, encoding: Int, monoUpmix: Boolean) {
+        val copies = if (monoUpmix) 2 else 1
         if (encoding == AudioFormat.ENCODING_PCM_FLOAT) {
-            while (buf.remaining() >= 4) meter.accept(buf.float)
+            while (buf.remaining() >= 4) {
+                val s = buf.float
+                repeat(copies) { meter.accept(s) }
+            }
         } else {
-            while (buf.remaining() >= 2) meter.accept(buf.short / 32768f)
+            while (buf.remaining() >= 2) {
+                val s = buf.short / 32768f
+                repeat(copies) { meter.accept(s) }
+            }
         }
     }
 
@@ -339,7 +357,12 @@ class AudioAnalyzer @Inject constructor() {
         if (mime == MediaFormat.MIMETYPE_AUDIO_FLAC) {
             runCatching { MediaCodec.createByCodecName("OMX.google.flac.decoder") }
                 .getOrNull()
-                ?.let { if (!it.name.startsWith("c2.")) return it else it.release() }
+                ?.let {
+                    // getName() echoes the alias; only the canonical name reveals a c2 component
+                    // behind it (aliases exist from API 29).
+                    val component = if (Build.VERSION.SDK_INT >= 29) it.canonicalName else it.name
+                    if (!component.startsWith("c2.")) return it else it.release()
+                }
         }
         return MediaCodec.createDecoderByType(mime)
     }

@@ -135,7 +135,7 @@ class DownloadManager @Inject constructor(
             GainInputs(tag.gainDb, tag.peak, TARGET_LUFS - tag.gainDb, "REPLAYGAIN_TAG")
         } else {
             val l = withContext(Dispatchers.IO) { audioAnalyzer.measureLoudness(path) }
-                ?: return TrackGainEntity(messageId, 1f, Float.NaN, "FAILED", System.currentTimeMillis())
+                ?: return TrackGainEntity(messageId, 1f, AudioAnalyzer.FLOOR_DB, "FAILED", System.currentTimeMillis())
             GainInputs(TARGET_LUFS - l.integratedLufs, l.samplePeak, l.integratedLufs, "COMPUTED_LUFS")
         }
         // Loud tracks may come down a long way; quiet ones go up at most +6 dB, and never so far

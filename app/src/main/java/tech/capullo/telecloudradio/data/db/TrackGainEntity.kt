@@ -16,7 +16,7 @@ data class TrackGainEntity(
     // The loudness this gain was computed from (the tag's implied value, or our own measured
     // integrated LUFS), for the stats UI / diagnostics - not used by playback itself.
     val measuredLufs: Float,
-    // "REPLAYGAIN_TAG" | "COMPUTED_LUFS" | "FAILED" (undecodable: unity gain, NaN loudness, kept
+    // "REPLAYGAIN_TAG" | "COMPUTED_LUFS" | "FAILED" (undecodable: unity gain, FLOOR_DB loudness, kept
     // so the file isn't re-analyzed on every play) - which path produced this row, so a future change in
     // path priority (e.g. preferring tags even over a stale computed value) needs no migration.
     val source: String,
