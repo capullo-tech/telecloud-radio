@@ -14,6 +14,7 @@ import androidx.media3.common.C
 import androidx.media3.common.ForwardingPlayer
 import androidx.media3.common.MediaItem
 import androidx.media3.common.MediaMetadata
+import androidx.media3.common.MimeTypes
 import androidx.media3.common.Player
 import androidx.media3.common.audio.ChannelMixingAudioProcessor
 import androidx.media3.common.audio.ChannelMixingMatrix
@@ -21,9 +22,12 @@ import androidx.media3.common.audio.SonicAudioProcessor
 import androidx.media3.common.util.UnstableApi
 import androidx.media3.exoplayer.DefaultRenderersFactory
 import androidx.media3.exoplayer.ExoPlayer
+import androidx.media3.exoplayer.Renderer
+import androidx.media3.exoplayer.audio.AudioRendererEventListener
 import androidx.media3.exoplayer.audio.AudioSink
 import androidx.media3.exoplayer.audio.DefaultAudioSink
 import androidx.media3.exoplayer.audio.TeeAudioProcessor
+import androidx.media3.exoplayer.mediacodec.MediaCodecSelector
 import androidx.media3.session.MediaSession
 import androidx.media3.session.MediaSessionService
 import dagger.hilt.android.AndroidEntryPoint
@@ -52,6 +56,7 @@ import tech.capullo.audio.contracts.NowPlaying
 import tech.capullo.audio.contracts.PlaybackController
 import tech.capullo.audio.player.BalanceAudioProcessor
 import tech.capullo.audio.player.FifoAudioBufferSink
+import tech.capullo.audio.player.GainAudioProcessor
 import tech.capullo.audio.snapcast.firstArtist
 import tech.capullo.audio.tunnel.TunnelManager
 import tech.capullo.telecloudradio.MainActivity
@@ -87,8 +92,12 @@ class PlaybackService : MediaSessionService() {
 
     @Inject lateinit var telegramRepository: tech.capullo.telecloudradio.data.telegram.TelegramRepository
 
+    @Inject lateinit var trackGainDao: tech.capullo.telecloudradio.data.db.TrackGainDao
+
     private var mediaSession: MediaSession? = null
     private val balanceProcessor = BalanceAudioProcessor()
+    private val gainProcessor = GainAudioProcessor()
+    private var gainJob: Job? = null
     private var fifoSink: FifoAudioBufferSink? = null
     private var releaseSpeakerJob: Job? = null
     private val serviceScope = CoroutineScope(SupervisorJob() + Dispatchers.Main)
@@ -384,15 +393,58 @@ class PlaybackService : MediaSessionService() {
         // own tee sits alongside the FIFO tee.
         val silenceSink = SilenceWatchdogSink().also { this.silenceSink = it }
 
-        // Sink chain: [mix → 2ch] → [resample → 48000] → [balance] → [tee → silence watchdog] →
-        // [tee → FIFO]. Balance sits before the tees so every listener (local snapclient, LAN
-        // clients, web players) hears the same adjusted stereo image.
+        // Sink chain: [mix → 2ch] → [resample → 48000] → [balance] → [gain] →
+        // [tee → silence watchdog] → [tee → FIFO]. Balance and gain sit before the tees so every
+        // listener (local snapclient, LAN clients, web players) hears the same adjusted audio.
         val renderersFactory = object : DefaultRenderersFactory(this) {
             // Prefer platform decoders, but fall back to the bundled Media3 FFmpeg extension (on the
             // classpath via capullo-audio) for formats the platform can't handle - widens codec
             // coverage and lets genuinely undecodable input surface as a decoder error.
             init {
                 setExtensionRendererMode(DefaultRenderersFactory.EXTENSION_RENDERER_MODE_ON)
+            }
+
+            // The platform's software Codec2 FLAC decoder (c2.android.flac.decoder - there is no
+            // hardware FLAC decode on any phone SoC, so this is what "platform decoder" means for
+            // FLAC) runs an output buffer pool that barely recycles (measured 1/6 recycle ratio,
+            // static for the life of a track). That churns continuous native allocation + Binder
+            // bufferpool transfers, which pressures the Java heap and triggers app-process GC every
+            // ~1-1.5s during FLAC playback (measured: zero app GC in 40s on a 48kHz MP3 track vs.
+            // continuous GC with 20-50MB LOS churn/cycle on a 44.1kHz FLAC track). Each GC pause
+            // occasionally exceeds snapserver's hardcoded 120ms AsioStream dryout window, idling the
+            // FIFO -> onResync -> local AudioTrack underrun -> audible stutter, repeating ~1/s.
+            //
+            // Route audio/flac to the bundled FFmpeg extension decoder instead (different code path,
+            // no Codec2 bufferpool involved) by excluding it from the platform codec lookup; every
+            // other mimeType keeps the normal platform-first behavior untouched.
+            private val flacToFfmpegSelector = MediaCodecSelector { mimeType, requiresSecureDecoder, requiresTunnelingDecoder ->
+                if (mimeType == MimeTypes.AUDIO_FLAC) {
+                    emptyList()
+                } else {
+                    MediaCodecSelector.DEFAULT.getDecoderInfos(mimeType, requiresSecureDecoder, requiresTunnelingDecoder)
+                }
+            }
+
+            override fun buildAudioRenderers(
+                context: Context,
+                extensionRendererMode: Int,
+                mediaCodecSelector: MediaCodecSelector,
+                enableDecoderFallback: Boolean,
+                audioSink: AudioSink,
+                eventHandler: Handler,
+                eventListener: AudioRendererEventListener,
+                out: ArrayList<Renderer>,
+            ) {
+                super.buildAudioRenderers(
+                    context,
+                    extensionRendererMode,
+                    flacToFfmpegSelector,
+                    enableDecoderFallback,
+                    audioSink,
+                    eventHandler,
+                    eventListener,
+                    out,
+                )
             }
 
             override fun buildAudioSink(
@@ -421,6 +473,7 @@ class PlaybackService : MediaSessionService() {
                             mixer,
                             resampler,
                             balanceProcessor,
+                            gainProcessor,
                             TeeAudioProcessor(silenceSink),
                             TeeAudioProcessor(sink),
                         ),
@@ -513,8 +566,21 @@ class PlaybackService : MediaSessionService() {
         player.addListener(object : Player.Listener {
             override fun onMediaItemTransition(mediaItem: MediaItem?, reason: Int) {
                 // Fresh track → restart the silence grace window and clear the per-item skip guard.
+                // Fires for the gapless addMediaItem advance as well as explicit setMediaItem jumps.
                 trackStartedElapsedMs = SystemClock.elapsedRealtime()
                 silenceSkipFiredForItem = false
+                // Apply its stored normalization gain: unity until the row exists (never analyzed,
+                // or analysis still running), then the stored value as soon as it is written, so a
+                // freshly downloaded track is corrected mid-play rather than only on its next play.
+                // The observer is replaced on every transition, so a late row can't touch the next item.
+                gainJob?.cancel()
+                gainProcessor.gain = 1f
+                val messageId = mediaItem?.mediaId?.toLongOrNull()
+                if (messageId != null) {
+                    gainJob = serviceScope.launch {
+                        trackGainDao.observe(messageId).collect { row -> gainProcessor.gain = row?.gainLinear ?: 1f }
+                    }
+                }
             }
 
             override fun onIsPlayingChanged(isPlaying: Boolean) {
@@ -524,11 +590,18 @@ class PlaybackService : MediaSessionService() {
                     // deadlocks - the 64KB pipe has no reader yet and a blocked
                     // tee stalls READY forever.
                     fifoSink?.enableWrites()
+                    // Release whatever was held since the pause, faded in.
+                    fifoSink?.resumeOutput()
                     snapcastManager.startBroadcast(snapNowPlaying, snapController)
                     // Playing again after the speaker was released from ENDED/IDLE: starting a new
                     // track there doesn't change playWhenReady, so no explicit-Play callback comes.
                     cancelSpeakerRelease()
                     snapcastManager.retakeReleasedSpeaker()
+                } else {
+                    // ExoPlayer keeps draining a few hundred ms of PCM into the tee after a pause;
+                    // reaching snapserver after it has gone idle, those bursts flip the stream back
+                    // to playing and every speaker plays a fragment. Fade out and hold them instead.
+                    fifoSink?.pauseOutput()
                 }
                 publishNowPlaying()
             }
@@ -555,10 +628,13 @@ class PlaybackService : MediaSessionService() {
             }
         })
 
-        // The playlist lives in PlayerViewModel (one MediaItem at a time), so ExoPlayer never
-        // has a next/previous item and disables those commands - breaking Bluetooth/AVRCP and
-        // lock-screen skip buttons. Force the commands available and route them through
-        // ActiveTrackRepository, the same path the mini player uses.
+        // The playlist lives in PlayerViewModel. ExoPlayer itself only ever sees at most two items
+        // (current + one pre-enqueued "next", for gapless auto-advance - see
+        // PlayerViewModel.syncEnqueuedNext) and never a real multi-item queue, so native
+        // next/previous are still unusable for user-facing skip. Force the commands available and
+        // route them through ActiveTrackRepository instead, the same path the mini player uses -
+        // seekToNext()/seekToPrevious() are hard overrides, never falling through to Media3's
+        // native skip-into-queue, so this never collides with the pre-enqueued item.
         val forwardingPlayer = object : ForwardingPlayer(player) {
             override fun getAvailableCommands(): Player.Commands = super.getAvailableCommands().buildUpon()
                 .add(Player.COMMAND_SEEK_TO_NEXT)

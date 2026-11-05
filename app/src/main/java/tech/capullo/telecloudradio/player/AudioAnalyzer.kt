@@ -4,6 +4,8 @@ import android.media.AudioFormat
 import android.media.MediaCodec
 import android.media.MediaExtractor
 import android.media.MediaFormat
+import android.os.Build
+import tech.capullo.audio.player.KWeighting
 import java.io.File
 import java.nio.ByteBuffer
 import java.nio.ByteOrder
@@ -19,6 +21,7 @@ class AudioAnalyzer @Inject constructor() {
         const val SPECTRUM_BINS = 256
         const val FLOOR_DB = -120f
         private const val MAX_ANALYZE_SECONDS = 30
+
         private const val SPECT_TIME_BINS = 200
         private const val SPECT_FREQ_BINS = 256
     }
@@ -222,6 +225,148 @@ class AudioAnalyzer @Inject constructor() {
         }
     }
 
+    // ── Gated integrated LUFS, for volume-normalization gain (separate from the stats-sheet
+    // analyze() above, which stays capped at MAX_ANALYZE_SECONDS) ──────────────────────────────
+
+    /** Whole-track loudness and sample peak for normalization; see [measureLoudness]. */
+    data class Loudness(val integratedLufs: Float, val samplePeak: Float)
+
+    /**
+     * Full-track integrated loudness (ITU-R BS.1770-4 / EBU R128, gated) and sample peak, measured
+     * while decoding: each decoder output buffer is read in place straight into a [LoudnessMeter],
+     * so memory stays constant (~80 KB of sub-block energies per hour) however long the track is,
+     * and nothing is allocated per buffer. That matters because this runs in the background during
+     * a broadcast, and allocation churn in this process is exactly what once drove the snapserver
+     * into dryouts (see the FLAC decoder note in PlaybackService).
+     *
+     * FLAC: the platform's c2.android.flac.decoder is the one whose buffer-pool churn caused that,
+     * so the standalone OMX.google.flac.decoder is tried first by name; where it is only an alias
+     * of the c2 component (or missing) the default decoder is used, still drained in place.
+     *
+     * Returns null if the file can't be decoded or has no gated loudness (e.g. digital silence).
+     */
+    fun measureLoudness(path: String): Loudness? {
+        if (!File(path).exists()) return null
+        val extractor = MediaExtractor()
+        var codec: MediaCodec? = null
+        return try {
+            extractor.setDataSource(path)
+            var format: MediaFormat? = null
+            for (i in 0 until extractor.trackCount) {
+                val f = extractor.getTrackFormat(i)
+                if (f.getString(MediaFormat.KEY_MIME)?.startsWith("audio/") == true) {
+                    extractor.selectTrack(i)
+                    format = f
+                    break
+                }
+            }
+            if (format == null) return null
+            val mime = format.getString(MediaFormat.KEY_MIME) ?: return null
+            val rate = if (format.containsKey(MediaFormat.KEY_SAMPLE_RATE)) format.getInteger(MediaFormat.KEY_SAMPLE_RATE) else 44100
+            val channels = if (format.containsKey(MediaFormat.KEY_CHANNEL_COUNT)) format.getInteger(MediaFormat.KEY_CHANNEL_COUNT) else 2
+            // Mono is measured as the chain broadcasts it: ChannelMixingAudioProcessor copies it at
+            // unity into L and R, so it is metered as two identical channels.
+            var monoUpmix = channels == 1
+            var meter = LoudnessMeter(rate, if (monoUpmix) 2 else channels)
+            if (mime == "audio/raw") {
+                val encoding = runCatching { format.getInteger(MediaFormat.KEY_PCM_ENCODING) }
+                    .getOrElse { AudioFormat.ENCODING_PCM_16BIT }
+                val buf = ByteBuffer.allocateDirect(65536).order(ByteOrder.nativeOrder())
+                while (true) {
+                    val n = extractor.readSampleData(buf, 0)
+                    if (n < 0) break
+                    buf.position(0).limit(n)
+                    feed(meter, buf, encoding, monoUpmix)
+                    buf.clear()
+                    extractor.advance()
+                }
+            } else {
+                val c = createDecoder(mime).also { codec = it }
+                c.configure(format, null, null, 0)
+                c.start()
+                var encoding = AudioFormat.ENCODING_PCM_16BIT
+                val info = MediaCodec.BufferInfo()
+                var inputDone = false
+                var outputDone = false
+                while (!outputDone) {
+                    if (!inputDone) {
+                        val idx = c.dequeueInputBuffer(10_000L)
+                        if (idx >= 0) {
+                            val n = extractor.readSampleData(c.getInputBuffer(idx)!!, 0)
+                            if (n < 0) {
+                                c.queueInputBuffer(idx, 0, 0, 0, MediaCodec.BUFFER_FLAG_END_OF_STREAM)
+                                inputDone = true
+                            } else {
+                                c.queueInputBuffer(idx, 0, n, extractor.sampleTime, 0)
+                                extractor.advance()
+                            }
+                        }
+                    }
+                    when (val out = c.dequeueOutputBuffer(info, 10_000L)) {
+                        MediaCodec.INFO_OUTPUT_FORMAT_CHANGED -> {
+                            // The decoder's real output can differ from the container (HE-AAC SBR
+                            // doubles the rate, PS turns mono into stereo). Always delivered before
+                            // the first output buffer, so nothing has been fed yet.
+                            val of = c.outputFormat
+                            if (of.containsKey(MediaFormat.KEY_PCM_ENCODING)) encoding = of.getInteger(MediaFormat.KEY_PCM_ENCODING)
+                            val outRate = if (of.containsKey(MediaFormat.KEY_SAMPLE_RATE)) of.getInteger(MediaFormat.KEY_SAMPLE_RATE) else rate
+                            val outChannels = if (of.containsKey(MediaFormat.KEY_CHANNEL_COUNT)) of.getInteger(MediaFormat.KEY_CHANNEL_COUNT) else channels
+                            monoUpmix = outChannels == 1
+                            meter = LoudnessMeter(outRate, if (monoUpmix) 2 else outChannels)
+                        }
+                        MediaCodec.INFO_TRY_AGAIN_LATER -> {}
+                        else -> if (out >= 0) {
+                            val buf = c.getOutputBuffer(out)!!.order(ByteOrder.nativeOrder())
+                            buf.position(info.offset).limit(info.offset + info.size)
+                            feed(meter, buf, encoding, monoUpmix)
+                            c.releaseOutputBuffer(out, false)
+                            if (info.flags and MediaCodec.BUFFER_FLAG_END_OF_STREAM != 0) outputDone = true
+                        }
+                    }
+                }
+            }
+            val r = meter.result()
+            r.integratedLufs?.let { Loudness(it, r.samplePeak) }
+        } catch (e: Exception) {
+            null
+        } finally {
+            runCatching {
+                codec?.stop()
+                codec?.release()
+            }
+            extractor.release()
+        }
+    }
+
+    private fun feed(meter: LoudnessMeter, buf: ByteBuffer, encoding: Int, monoUpmix: Boolean) {
+        val copies = if (monoUpmix) 2 else 1
+        if (encoding == AudioFormat.ENCODING_PCM_FLOAT) {
+            while (buf.remaining() >= 4) {
+                val s = buf.float
+                repeat(copies) { meter.accept(s) }
+            }
+        } else {
+            while (buf.remaining() >= 2) {
+                val s = buf.short / 32768f
+                repeat(copies) { meter.accept(s) }
+            }
+        }
+    }
+
+    private fun createDecoder(mime: String): MediaCodec {
+        if (mime == MediaFormat.MIMETYPE_AUDIO_FLAC) {
+            runCatching { MediaCodec.createByCodecName("OMX.google.flac.decoder") }
+                .getOrNull()
+                ?.let {
+                    // getName() echoes the alias; only the canonical name reveals a c2 component
+                    // behind it (aliases exist from API 29).
+                    val component = if (Build.VERSION.SDK_INT >= 29) it.canonicalName else it.name
+                    if (!component.startsWith("c2.")) return it else it.release()
+                }
+        }
+        return MediaCodec.createDecoderByType(mime)
+    }
+
     // ── LUFS (ITU-R BS.1770, ungated) ────────────────────────────────────────
 
     private fun computeLufs(samples: FloatArray, sampleRate: Int, channelCount: Int): Float {
@@ -244,25 +389,12 @@ class AudioAnalyzer @Inject constructor() {
     }
 
     private fun applyKWeighting(x: FloatArray, sampleRate: Int): FloatArray {
-        // Stage 1: pre-filter (high-shelf ~1682 Hz, +4 dB) - 48 kHz coefficients are
-        // a close approximation for 44.1–96 kHz; error < 0.1 LUFS for typical content
-        val b1 = doubleArrayOf(1.53512485958697, -2.69169618940638, 1.19839281085285)
-        val a1 = doubleArrayOf(-1.69065929318241, 0.73248077421585)
-
-        // Stage 2: RLB high-pass at 38.13506 Hz - computed exactly for this sample rate
-        val (b2, a2) = rlbHighPassCoeffs(sampleRate)
-
-        val stage1 = biquadFilter(x, b1, a1)
-        return biquadFilter(stage1, b2, a2)
-    }
-
-    private fun rlbHighPassCoeffs(sampleRate: Int): Pair<DoubleArray, DoubleArray> {
-        val k = tan(PI * 38.13506 / sampleRate)
-        val q = 1.0 / sqrt(2.0)
-        val d = 1.0 + k / q + k * k
-        val b = doubleArrayOf(1.0 / d, -2.0 / d, 1.0 / d)
-        val a = doubleArrayOf(2.0 * (k * k - 1.0) / d, (1.0 - k / q + k * k) / d)
-        return b to a
+        // Same BS.1770 coefficients as the normalization path (KWeighting, derived from the rate),
+        // so the stats sheet and the playback gain agree on a track's loudness.
+        val shelf = KWeighting.shelf(sampleRate)
+        val highPass = KWeighting.highPass(sampleRate)
+        val stage1 = biquadFilter(x, doubleArrayOf(shelf.b0, shelf.b1, shelf.b2), doubleArrayOf(shelf.a1, shelf.a2))
+        return biquadFilter(stage1, doubleArrayOf(highPass.b0, highPass.b1, highPass.b2), doubleArrayOf(highPass.a1, highPass.a2))
     }
 
     private fun biquadFilter(x: FloatArray, b: DoubleArray, a: DoubleArray): FloatArray {
