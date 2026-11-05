@@ -164,6 +164,10 @@ class SnapcastManager @Inject constructor(
     private var currentSnapclientPort: Int = 0
     private var audioFocus: AudioFocusController? = null
 
+    // True after releaseSpeaker(): focus abandoned and the local snapclient stopped because playback
+    // has been paused a while. Only an explicit Play (reclaimAudioFocus(fromPlay = true)) clears it.
+    private var speakerReleased = false
+
     // --- Calibration support ---
     //
     // CalibrationHost (capullo-audio) needs three things this class already owns privately: the
@@ -259,19 +263,48 @@ class SnapcastManager @Inject constructor(
     }
 
     /**
-     * Explicit user PLAY: reclaim the speaker for our local snapclient. [AudioFocusController.request]
-     * unconditionally (re)acquires audio focus, so a co-broadcasting app's local snapclient is evicted
-     * (its focus listener gets AUDIOFOCUS_LOSS and stops); [AudioFocusController.refocus] then restarts
-     * our own snapclient if a prior focus loss had stopped it. Focus is otherwise only requested at
-     * broadcast start, so without this a play/app-switch never forces the other app to yield the
-     * speaker. No-op when not broadcasting (audioFocus is null → no local snapclient to arbitrate); the
-     * broadcast ExoPlayer/snapserver are untouched, so web/LAN listeners keep streaming either way.
+     * Reclaim the speaker for our local snapclient, on an explicit Play ([fromPlay]) or when the app
+     * comes to the foreground. [AudioFocusController.request] unconditionally (re)acquires audio
+     * focus, so a co-broadcasting app's local snapclient is evicted (its focus listener gets
+     * AUDIOFOCUS_LOSS and stops); [AudioFocusController.refocus] then restarts our own snapclient if
+     * a prior focus loss had stopped it. After [releaseSpeaker] only a Play takes the speaker back:
+     * opening the app while paused would just hold the speaker for silence. No-op when not
+     * broadcasting (audioFocus is null); the broadcast ExoPlayer/snapserver are untouched, so
+     * web/LAN listeners keep streaming either way.
      */
-    fun reclaimAudioFocus() {
-        audioFocus?.let {
-            it.request()
-            it.refocus()
+    fun reclaimAudioFocus(fromPlay: Boolean = false) {
+        val focus = audioFocus ?: return
+        if (speakerReleased) {
+            if (!fromPlay) return
+            speakerReleased = false
+            focus.request()
+            val h = currentSnapclientHost
+            if (h != null && snapclientProcess == null) launchSnapclientProcess(h, currentSnapclientPort)
+            Log.d(TAG, "speaker reclaimed on Play")
+            return
         }
+        focus.request()
+        focus.refocus()
+    }
+
+    /** Playback actually started while the speaker was released: take it back. */
+    fun retakeReleasedSpeaker() {
+        if (speakerReleased) reclaimAudioFocus(fromPlay = true)
+    }
+
+    /**
+     * Playback has been paused for a while: give the speaker back to the system. Abandons audio
+     * focus (so no other app's playback is treated as a loss to recover from, and the quiet-watcher
+     * can't resume us into silence) and stops the local snapclient. The broadcast itself keeps
+     * running for other listeners. Undone by [reclaimAudioFocus] with fromPlay = true.
+     */
+    fun releaseSpeaker() {
+        val focus = audioFocus ?: return
+        if (speakerReleased || !_state.value.isBroadcasting) return
+        speakerReleased = true
+        focus.abandon()
+        destroySnapclientProcess()
+        Log.d(TAG, "speaker released after pause")
     }
 
     // Written next to the served index.html (snapserver doc_root); the web
@@ -481,6 +514,7 @@ class SnapcastManager @Inject constructor(
 
     private fun startLocalSnapclient(host: String, port: Int) {
         destroySnapclientProcess()
+        speakerReleased = false
         currentSnapclientHost = host
         currentSnapclientPort = port
         localChannelTagSet = false
@@ -566,6 +600,7 @@ class SnapcastManager @Inject constructor(
     private fun stopLocalSnapclient() {
         destroySnapclientProcess()
         currentSnapclientHost = null
+        speakerReleased = false
         audioFocus?.abandon()
     }
 

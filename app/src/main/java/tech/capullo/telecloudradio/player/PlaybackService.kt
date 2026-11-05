@@ -99,6 +99,7 @@ class PlaybackService : MediaSessionService() {
     private val gainProcessor = GainAudioProcessor()
     private var gainJob: Job? = null
     private var fifoSink: FifoAudioBufferSink? = null
+    private var releaseSpeakerJob: Job? = null
     private val serviceScope = CoroutineScope(SupervisorJob() + Dispatchers.Main)
 
     // --- Acoustic sync calibration ---
@@ -592,6 +593,10 @@ class PlaybackService : MediaSessionService() {
                     // Release whatever was held since the pause, faded in.
                     fifoSink?.resumeOutput()
                     snapcastManager.startBroadcast(snapNowPlaying, snapController)
+                    // Playing again after the speaker was released from ENDED/IDLE: starting a new
+                    // track there doesn't change playWhenReady, so no explicit-Play callback comes.
+                    cancelSpeakerRelease()
+                    snapcastManager.retakeReleasedSpeaker()
                 } else {
                     // ExoPlayer keeps draining a few hundred ms of PCM into the tee after a pause;
                     // reaching snapserver after it has gone idle, those bursts flip the stream back
@@ -609,8 +614,17 @@ class PlaybackService : MediaSessionService() {
                 // steal the speaker from whoever the user had since handed it to. Bringing the app
                 // to the foreground reclaims separately (MainActivity.onStart).
                 if (playWhenReady && reason == Player.PLAY_WHEN_READY_CHANGE_REASON_USER_REQUEST) {
-                    snapcastManager.reclaimAudioFocus()
+                    snapcastManager.reclaimAudioFocus(fromPlay = true)
                 }
+                // Paused long enough: give the speaker back (focus + local snapclient) so a paused
+                // TC neither blocks nor later auto-resumes over another app. The broadcast stays up.
+                if (playWhenReady) cancelSpeakerRelease() else scheduleSpeakerRelease()
+            }
+
+            override fun onPlaybackStateChanged(playbackState: Int) {
+                // A finished playlist or a player error leaves playWhenReady = true, so the
+                // callback above never fires; the speaker would be held for silence forever.
+                if (playbackState == Player.STATE_ENDED || playbackState == Player.STATE_IDLE) scheduleSpeakerRelease()
             }
         })
 
@@ -741,6 +755,19 @@ class PlaybackService : MediaSessionService() {
 
     override fun onGetSession(controllerInfo: MediaSession.ControllerInfo) = mediaSession
 
+    private fun scheduleSpeakerRelease() {
+        releaseSpeakerJob?.cancel()
+        releaseSpeakerJob = serviceScope.launch {
+            delay(RELEASE_SPEAKER_AFTER_PAUSE_MS)
+            snapcastManager.releaseSpeaker()
+        }
+    }
+
+    private fun cancelSpeakerRelease() {
+        releaseSpeakerJob?.cancel()
+        releaseSpeakerJob = null
+    }
+
     override fun onDestroy() {
         serviceScope.cancel()
         // Playback is genuinely over (service torn down) → drop the active-playback state so the
@@ -788,5 +815,8 @@ class PlaybackService : MediaSessionService() {
         // buffering / short silent intros while still cutting a dead track quickly.
         private const val WATCHDOG_TICK_MS = 1000L
         private const val SILENT_SKIP_MS = 8000L
+
+        // How long playback stays paused before the local speaker is released.
+        private const val RELEASE_SPEAKER_AFTER_PAUSE_MS = 30_000L
     }
 }
