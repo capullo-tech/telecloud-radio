@@ -284,6 +284,11 @@ class SnapcastManager @Inject constructor(
         focus.refocus()
     }
 
+    /** Playback actually started while the speaker was released: take it back. */
+    fun retakeReleasedSpeaker() {
+        if (speakerReleased) reclaimAudioFocus(fromPlay = true)
+    }
+
     /**
      * Playback has been paused for a while: give the speaker back to the system. Abandons audio
      * focus (so no other app's playback is treated as a loss to recover from, and the quiet-watcher

@@ -525,6 +525,10 @@ class PlaybackService : MediaSessionService() {
                     // tee stalls READY forever.
                     fifoSink?.enableWrites()
                     snapcastManager.startBroadcast(snapNowPlaying, snapController)
+                    // Playing again after the speaker was released from ENDED/IDLE: starting a new
+                    // track there doesn't change playWhenReady, so no explicit-Play callback comes.
+                    cancelSpeakerRelease()
+                    snapcastManager.retakeReleasedSpeaker()
                 }
                 publishNowPlaying()
             }
@@ -541,15 +545,13 @@ class PlaybackService : MediaSessionService() {
                 }
                 // Paused long enough: give the speaker back (focus + local snapclient) so a paused
                 // TC neither blocks nor later auto-resumes over another app. The broadcast stays up.
-                releaseSpeakerJob?.cancel()
-                releaseSpeakerJob = if (playWhenReady) {
-                    null
-                } else {
-                    serviceScope.launch {
-                        delay(RELEASE_SPEAKER_AFTER_PAUSE_MS)
-                        snapcastManager.releaseSpeaker()
-                    }
-                }
+                if (playWhenReady) cancelSpeakerRelease() else scheduleSpeakerRelease()
+            }
+
+            override fun onPlaybackStateChanged(playbackState: Int) {
+                // A finished playlist or a player error leaves playWhenReady = true, so the
+                // callback above never fires; the speaker would be held for silence forever.
+                if (playbackState == Player.STATE_ENDED || playbackState == Player.STATE_IDLE) scheduleSpeakerRelease()
             }
         })
 
@@ -676,6 +678,19 @@ class PlaybackService : MediaSessionService() {
     }
 
     override fun onGetSession(controllerInfo: MediaSession.ControllerInfo) = mediaSession
+
+    private fun scheduleSpeakerRelease() {
+        releaseSpeakerJob?.cancel()
+        releaseSpeakerJob = serviceScope.launch {
+            delay(RELEASE_SPEAKER_AFTER_PAUSE_MS)
+            snapcastManager.releaseSpeaker()
+        }
+    }
+
+    private fun cancelSpeakerRelease() {
+        releaseSpeakerJob?.cancel()
+        releaseSpeakerJob = null
+    }
 
     override fun onDestroy() {
         serviceScope.cancel()
