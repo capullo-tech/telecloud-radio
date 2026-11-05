@@ -6,13 +6,14 @@ import androidx.room.migration.Migration
 import androidx.sqlite.db.SupportSQLiteDatabase
 
 @Database(
-    entities = [MediaMessageEntity::class, AudioAnalysisEntity::class],
-    version = 5,
+    entities = [MediaMessageEntity::class, AudioAnalysisEntity::class, TrackGainEntity::class],
+    version = 6,
     exportSchema = false,
 )
 abstract class MediaMessageDatabase : RoomDatabase() {
     abstract fun mediaMessageDao(): MediaMessageDao
     abstract fun audioAnalysisDao(): AudioAnalysisDao
+    abstract fun trackGainDao(): TrackGainDao
 
     companion object {
         val MIGRATION_1_2 = object : Migration(1, 2) {
@@ -57,6 +58,19 @@ abstract class MediaMessageDatabase : RoomDatabase() {
                     "ALTER TABLE audio_analysis ADD COLUMN totalSamples INTEGER NOT NULL DEFAULT 0",
                 )
                 database.execSQL("ALTER TABLE audio_analysis ADD COLUMN channelStatsCsv TEXT")
+            }
+        }
+        val MIGRATION_5_6 = object : Migration(5, 6) {
+            override fun migrate(database: SupportSQLiteDatabase) {
+                database.execSQL(
+                    """CREATE TABLE IF NOT EXISTS track_gain (
+                        messageId INTEGER PRIMARY KEY NOT NULL,
+                        gainLinear REAL NOT NULL,
+                        measuredLufs REAL NOT NULL,
+                        source TEXT NOT NULL,
+                        computedAt INTEGER NOT NULL
+                    )""",
+                )
             }
         }
     }

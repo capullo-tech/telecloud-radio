@@ -93,7 +93,10 @@ class TelegramRepository @Inject constructor(
     suspend fun checkCode(code: String) = client.checkCode(code)
     suspend fun checkPassword(password: String) = client.checkPassword(password)
 
-    suspend fun getAudioGroups(limit: Int): List<TelegramChat> = client.getChats(limit).filter { it.type != ChatType.OTHER }
+    // No cap: the list used to be truncated by a user-facing "Stations" limit (default 20,
+    // applied before the type filter below) which could hide most real stations on an account
+    // where the main chat list is DM-heavy. CHAT_FETCH_CAP is a sanity ceiling, not a UX knob.
+    suspend fun getAudioGroups(): List<TelegramChat> = client.getChats(CHAT_FETCH_CAP).filter { it.type != ChatType.OTHER }
 
     // Downloads the crisp small avatar for a chat (TelegramChat.photoFileId); null if unavailable.
     suspend fun downloadChatPhoto(fileId: Int): String? = client.downloadChatPhoto(fileId)
@@ -185,4 +188,10 @@ class TelegramRepository @Inject constructor(
         groupType = groupType,
         reactions = reactions,
     )
+
+    private companion object {
+        // TDLib GetChats sanity ceiling - the main list is already locally synced, so this is not
+        // a network-cost knob, just a backstop against an unbounded fetch on a pathological account.
+        const val CHAT_FETCH_CAP = 1000
+    }
 }

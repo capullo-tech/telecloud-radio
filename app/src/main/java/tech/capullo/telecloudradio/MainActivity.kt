@@ -120,7 +120,7 @@ class MainActivity : ComponentActivity() {
         // BOTH broadcasting on one device and you foreground TC just to glance - it silences QC
         // here (QC keeps broadcasting to other rooms). If that ever bites, gate this call behind a
         // SettingsRepository "reclaim speaker when opened" toggle (default on), mirroring
-        // stationLimit/balance/themeMode: if (settings.reclaimOnForeground.value) reclaim...().
+        // favoriteStationIds/balance/themeMode: if (settings.reclaimOnForeground.value) reclaim...().
         snapcastManager.reclaimAudioFocus()
     }
 

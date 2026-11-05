@@ -26,17 +26,22 @@ class SettingsRepository @Inject constructor(@ApplicationContext context: Contex
             prefs.edit().putBoolean("remember_last_group", value).apply()
         }
 
-    // How many Telegram chats to fetch for the station list. This is a fetch cap;
-    // the displayed count can be a little lower after non-group/channel chats are filtered out.
-    // A flow so the station-selector re-queries live when the setting changes, instead of only
-    // picking it up on (re)entry.
-    private val _stationLimit = MutableStateFlow(prefs.getInt("station_limit", 20))
-    val stationLimit: StateFlow<Int> = _stationLimit.asStateFlow()
+    // Favorited station ids, for pinning them to the top of the station-select list when no
+    // search query is active (GroupSelectorScreen). A flow so the heart toggle and the resulting
+    // re-sort are live. Stored as a Set<String> (SharedPreferences has no Set<Long>); always a
+    // freshly-built Set is written, never a mutated view of the one getStringSet returns - that
+    // view is documented as unsafe to mutate.
+    private val _favoriteStationIds = MutableStateFlow(
+        prefs.getStringSet("favorite_station_ids", emptySet())!!.mapNotNull { it.toLongOrNull() }.toSet(),
+    )
+    val favoriteStationIds: StateFlow<Set<Long>> = _favoriteStationIds.asStateFlow()
 
-    fun setStationLimit(value: Int) {
-        val clamped = value.coerceIn(1, 200)
-        prefs.edit().putInt("station_limit", clamped).apply()
-        _stationLimit.value = clamped
+    fun toggleFavoriteStation(chatId: Long) {
+        val next = _favoriteStationIds.value.toMutableSet().apply {
+            if (!add(chatId)) remove(chatId)
+        }
+        prefs.edit().putStringSet("favorite_station_ids", next.map { it.toString() }.toSet()).apply()
+        _favoriteStationIds.value = next
     }
 
     // Sleep timer duration in minutes; the timer itself lives in PlayerViewModel

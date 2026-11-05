@@ -144,6 +144,22 @@ class PlayerViewModel @Inject constructor(
     // Last prefetch window handed to prefetchJob; used to skip pointless cancel/relaunch cycles.
     private var lastPrefetchWindow: List<Int>? = null
 
+    // Gapless advance: the messageId (if any) of the track currently staged as the controller's
+    // queued-but-not-yet-playing next MediaItem (addMediaItem, never setMediaItem - that would
+    // replace the whole queue). Media3 then transitions to it with no flush/preroll, so the FIFO
+    // never goes idle crossing a track boundary - unlike the old STATE_ENDED -> setMediaItem path,
+    // which tore the sink down and rebuilt it, very likely tripping snapserver's 120ms dryout window
+    // on every single track change. Kept to exactly ONE track ahead (not the whole playlist) because
+    // the playlist can be reordered/filtered live while listening; queueing further would risk
+    // playing a since-filtered-out or since-reordered item. Tracked by identity, not playlist index:
+    // a queue edit (playNext, remove, reorder) can put a different track at the same index, and an
+    // index match would leave the old one staged. Explicit jumps (user taps a track, NEXT/PREV,
+    // playAt) stay destructive via playTrack()/setMediaItem - only the natural end-of-track advance
+    // goes through this path (gated on Player.MEDIA_ITEM_TRANSITION_REASON_AUTO, which setMediaItem
+    // never produces).
+    private var stagedNextId: Long? = null
+    private var enqueueJob: Job? = null
+
     // Set when the countdown hit zero mid-track: playback finishes the current
     // track, then onTrackEnded pauses instead of advancing.
     private var sleepAtTrackEnd = false
@@ -170,6 +186,9 @@ class PlayerViewModel @Inject constructor(
                         if (dur > 0L) _uiState.value = _uiState.value.copy(trackDuration = dur)
                     }
                     if (state == Player.STATE_ENDED) onTrackEnded()
+                }
+                override fun onMediaItemTransition(mediaItem: MediaItem?, reason: Int) {
+                    if (reason == Player.MEDIA_ITEM_TRANSITION_REASON_AUTO) onGaplessAdvance()
                 }
                 override fun onIsPlayingChanged(isPlaying: Boolean) {
                     if (isPlaying && !controllerPreparedForCurrentChat) {
@@ -338,7 +357,7 @@ class PlayerViewModel @Inject constructor(
                 // its audio history - before giving up, so auto-open doesn't dead-end on the empty
                 // "No audio tracks found" screen.
                 _uiState.value = PlayerUiState(isLoading = true)
-                val chat = runCatching { telegramRepository.getAudioGroups(200) }
+                val chat = runCatching { telegramRepository.getAudioGroups() }
                     .getOrNull()?.find { it.id == chatId }
                 if (chat != null) {
                     runCatching { telegramRepository.syncAudioMessages(chat) }
@@ -550,6 +569,7 @@ class PlayerViewModel @Inject constructor(
             // Prefetch even before playback starts (e.g. shuffling right after app open) -
             // otherwise "next" stays greyed with nothing downloading it
             if (playlist.isNotEmpty()) prefetchAhead(currentIndex)
+            syncEnqueuedNext()
             saveQueueState()
         }
     }
@@ -698,6 +718,8 @@ class PlayerViewModel @Inject constructor(
     fun toggleSleepTimer() {
         if (_uiState.value.sleepTimerActive) {
             cancelSleepTimer()
+            // A pending "finish this track" had unstaged the next one - restore gapless.
+            syncEnqueuedNext()
             return
         }
         val totalSec = settings.sleepTimerMinutes * 60
@@ -710,9 +732,12 @@ class PlayerViewModel @Inject constructor(
                 remaining--
                 _sleepTimerSecondsRemaining.value = remaining
             }
-            // Countdown done - let the current track play out, then pause
+            // Countdown done - let the current track play out, then pause. That pause only runs from
+            // onTrackEnded (STATE_ENDED), which a gapless advance never reaches, so unstage the next
+            // track; syncEnqueuedNext won't restage it while sleepAtTrackEnd is set.
             if (controller?.isPlaying == true) {
                 sleepAtTrackEnd = true
+                syncEnqueuedNext()
             } else {
                 cancelSleepTimer()
             }
@@ -756,6 +781,154 @@ class PlayerViewModel @Inject constructor(
                 ) {
                     viewModelScope.launch { playTrack(currentIndex + 1) }
                 }
+        }
+    }
+
+    // Computes which playlist index should play after the current one, under the active repeat
+    // mode - same semantics as onTrackEnded's switch, factored out so the gapless pre-enqueue
+    // (syncEnqueuedNext) and the natural end-of-track advance agree on "what's next". Returns null
+    // when nothing should follow (repeat off, sitting on the last track; or repeat-one with the
+    // playing track filtered out of the queue, matching onTrackEnded's existing seekTo(0) fallback
+    // for that edge case).
+    private fun nextIndexForAdvance(): Int? = when (_uiState.value.repeatMode) {
+        Player.REPEAT_MODE_ONE -> currentIndex.takeIf { it >= 0 }
+        Player.REPEAT_MODE_ALL -> (currentIndex + 1).mod(playlist.size).takeIf { playlist.isNotEmpty() }
+        else -> (currentIndex + 1).takeIf { it < playlist.size }
+    }
+
+    // The playlist index to stage behind the controller's current item, or null when nothing should
+    // be: no next under the repeat mode, the controller isn't on this VM's current track (another
+    // chat's item, or a playTrack still downloading), or the sleep timer is waiting for this track
+    // to end.
+    private fun stageTargetIndex(): Int? {
+        val target = nextIndexForAdvance()?.takeIf { it in playlist.indices } ?: return null
+        if (!controllerPreparedForCurrentChat || sleepAtTrackEnd) return null
+        val playingId = controller?.currentMediaItem?.mediaId?.toLongOrNull() ?: return null
+        val currentId = playlist.getOrNull(currentIndex)?.messageId ?: _uiState.value.track?.messageId
+        return target.takeIf { playingId == currentId }
+    }
+
+    // Keeps exactly one track staged right after the controller's current item (addMediaItem) for
+    // gapless auto-advance - see stagedNextId's doc. Called after every playlist mutation
+    // (publishQueue), after playTrack lands a new current track, after prefetchAhead's download of
+    // the next file completes (the file may not have existed yet on the first call), after a
+    // gapless transition fires (to stage the one after that), and when the repeat mode or the sleep
+    // timer changes what should follow. Cheap no-op when the track that should follow is already
+    // the one staged.
+    private fun syncEnqueuedNext() {
+        val target = stageTargetIndex()
+        val targetId = target?.let { playlist[it].messageId }
+        if (targetId != null && targetId == stagedNextId) return
+        enqueueJob?.cancel()
+        unstageNext()
+        if (target == null) return
+        val track = playlist[target]
+        enqueueJob = viewModelScope.launch {
+            // Not downloaded yet: bail quietly. prefetchAhead's own loop calls syncEnqueuedNext
+            // again right after this file lands, which retries.
+            val path = downloadManager.getCachedPath(track.messageId) ?: return@launch
+            val (albumArt, audioMeta) = withContext(Dispatchers.IO) {
+                val meta = audioMetadataReader.read(path)
+                Pair(squareCropArt(extractAlbumArt(path) ?: albumArtFetcher.cached(track.messageId)), meta)
+            }
+            // The playlist/current position may have moved on while this suspended (reorder,
+            // filter, explicit skip) - re-validate before committing instead of staging a stale item.
+            if (stageTargetIndex()?.let { playlist[it].messageId } != track.messageId) return@launch
+            val displayTrack = track.copy(
+                title = audioMeta.tagTitle ?: track.title,
+                performer = audioMeta.tagArtist ?: track.performer,
+            )
+            val mediaMetadata = MediaMetadata.Builder()
+                .setTitle(displayTrack.title ?: displayTrack.fileName ?: "Unknown")
+                .setArtist(displayTrack.performer)
+                .setStation(chatTitle.takeIf { it.isNotBlank() })
+                .apply { albumArt?.let { setArtworkData(it, MediaMetadata.PICTURE_TYPE_FRONT_COVER) } }
+                .build()
+            controller?.addMediaItem(
+                MediaItem.Builder()
+                    .setMediaId(track.messageId.toString())
+                    .setUri(Uri.fromFile(File(path)))
+                    .setMediaMetadata(mediaMetadata)
+                    .build(),
+            )
+            stagedNextId = track.messageId
+        }
+    }
+
+    // Drops everything queued AFTER the controller's current item. Never touches the current item
+    // (removing it would cut the playing track) or the finished ones before it - onGaplessAdvance
+    // clears those.
+    private fun unstageNext() {
+        controller?.let {
+            val firstAfter = it.currentMediaItemIndex + 1
+            if (it.mediaItemCount > firstAfter) it.removeMediaItems(firstAfter, it.mediaItemCount)
+        }
+        stagedNextId = null
+    }
+
+    // Fires when ExoPlayer itself auto-advances into the staged next item (gapless - no flush, no
+    // preroll, the FIFO never idles crossing the boundary). Mirrors playTrack's "truthful swap"
+    // tail: the track is now actually audible, so every user-visible field updates for real. Does
+    // not call setMediaItem/prepare/play - ExoPlayer is already playing it. The finished item is
+    // still queued before the new current one, so it is removed first: removing items BEFORE
+    // currentMediaItemIndex never interrupts playback, and it restores the [current] (+ staged
+    // next) shape syncEnqueuedNext works on.
+    private fun onGaplessAdvance() {
+        val ctrl = controller ?: return
+        val playingIndex = ctrl.currentMediaItemIndex
+        if (playingIndex > 0) ctrl.removeMediaItems(0, playingIndex)
+        stagedNextId = null
+        if (playlist.isEmpty() || !controllerPreparedForCurrentChat) return
+        // Resolve what is actually playing from the controller, not from what was staged. The
+        // queue allows duplicates: prefer the slot the advance was expected to land on.
+        val messageId = ctrl.currentMediaItem?.mediaId?.toLongOrNull() ?: return
+        val index = nextIndexForAdvance()?.takeIf { playlist.getOrNull(it)?.messageId == messageId }
+            ?: playlist.indexOfFirst { it.messageId == messageId }.takeIf { it >= 0 }
+            ?: return
+        val track = playlist[index]
+        val path = downloadManager.getCachedPath(track.messageId) ?: return
+        currentIndex = index
+        downloadManager.activeMessageId = track.messageId
+        viewModelScope.launch {
+            val (albumArt, audioMeta) = withContext(Dispatchers.IO) {
+                val meta = audioMetadataReader.read(path)
+                Pair(squareCropArt(extractAlbumArt(path) ?: albumArtFetcher.cached(track.messageId)), meta)
+            }
+            val displayTrack = track.copy(
+                title = audioMeta.tagTitle ?: track.title,
+                performer = audioMeta.tagArtist ?: track.performer,
+            )
+            _activeDownloadProgress.value = null
+            _positionState.value = 0L
+            _uiState.value = _uiState.value.copy(
+                track = displayTrack,
+                albumArt = albumArt,
+                isLoading = false,
+                audioMeta = audioMeta,
+                currentIndex = index,
+                trackDuration = controller?.duration?.takeIf { it > 0L } ?: 0L,
+                audioAnalysis = null,
+                showStats = false,
+                showReactions = false,
+                reactionsInfo = null,
+            )
+            activeTrackRepository.set(track, chatId, chatTitle)
+            saveLastPlayed(chatId, track.messageId)
+            activeTrackRepository.updateTrack(displayTrack)
+            activeTrackRepository.updateAlbumArt(albumArt)
+            refreshNextTrackState()
+            prefetchAhead(index)
+            syncEnqueuedNext()
+            if (connectivityMonitor.isOnline.value) {
+                runCatching {
+                    val reactions = telegramRepository.refreshReactions(track.chatId, track.messageId)
+                    if (_uiState.value.track?.messageId == track.messageId) {
+                        _uiState.value = _uiState.value.copy(
+                            track = _uiState.value.track!!.copy(reactions = reactions),
+                        )
+                    }
+                }
+            }
         }
     }
 
@@ -825,6 +998,7 @@ class PlayerViewModel @Inject constructor(
         }
         _uiState.value = _uiState.value.copy(repeatMode = next)
         refreshNextTrackState()
+        syncEnqueuedNext()
     }
 
     fun seekTo(positionMs: Long) {
@@ -1080,9 +1254,14 @@ class PlayerViewModel @Inject constructor(
             .setStation(chatTitle.takeIf { it.isNotBlank() })
             .apply { albumArt?.let { setArtworkData(it, MediaMetadata.PICTURE_TYPE_FRONT_COVER) } }
             .build()
+        // setMediaItem replaces the whole controller queue (including any item staged by a
+        // previous syncEnqueuedNext) with just this one - drop the stale tracking var to match.
+        stagedNextId = null
+        enqueueJob?.cancel()
         controller?.apply {
             setMediaItem(
                 MediaItem.Builder()
+                    .setMediaId(track.messageId.toString())
                     .setUri(Uri.fromFile(File(path)))
                     .setMediaMetadata(mediaMetadata)
                     .build(),
@@ -1093,6 +1272,7 @@ class PlayerViewModel @Inject constructor(
 
         refreshNextTrackState()
         prefetchAhead(index)
+        syncEnqueuedNext()
         // Note: no eager eviction of the previous track - recently played files stay on
         // disk (LRU) until the GB buffer limit pushes them out, so "previous" is instant.
 
@@ -1153,6 +1333,9 @@ class PlayerViewModel @Inject constructor(
                 val path = downloadManager.getCachedPath(t.messageId)
                     ?: downloadManager.ensureDownloaded(t.chatId, t.messageId)
                 refreshNextTrackState()
+                // The file for a gapless-staging target (nextIndexForAdvance) may not have existed
+                // on syncEnqueuedNext's earlier attempt; retry now that it (might have) landed.
+                if (path != null && i == nextIndexForAdvance()) syncEnqueuedNext()
                 // Pre-fetch online art too, so the lock screen has it at play start
                 if (path != null && albumArtFetcher.cached(t.messageId) == null &&
                     connectivityMonitor.isOnline.value
