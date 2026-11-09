@@ -529,7 +529,10 @@ class PlaybackService : MediaSessionService() {
             // callback above never fires; the speaker would be held for silence forever.
             if (playbackState == Player.STATE_ENDED || playbackState == Player.STATE_IDLE) {
                 scheduleSpeakerRelease()
-                cancelCrossfade(promoteIfHandedOff = false)
+                // Same guard as the siblings: once the audio has handed off, the outgoing deck
+                // ending (or erroring on its tail) before the posted promotion must not take the
+                // broadcast back from the incoming one.
+                if (!crossfadeHandedOff()) cancelCrossfade(promoteIfHandedOff = false)
             }
         }
     }
@@ -905,13 +908,13 @@ class PlaybackService : MediaSessionService() {
             val lane = mixer.newLane()
             mixer.setLead(lane)
             deck.lane = lane
-            deck.fifoRoute.attach(lane)
+            deck.fifoRoute.attach(lane, replayFormat = false)
         } else {
             if (deck.lane == null) return
             deck.lane = null
             // Straight to the FIFO from the next buffer. Whatever the lane still delays since a
             // crossfade handed off to it (at most its AudioTrack buffer, see CrossfadeMixer) is skipped.
-            deck.fifoRoute.attach(sink)
+            deck.fifoRoute.attach(sink, replayFormat = false)
             mixer?.setLead(null)
         }
     }

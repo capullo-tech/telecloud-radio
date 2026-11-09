@@ -34,9 +34,13 @@ class RoutableSink : TeeAudioProcessor.AudioBufferSink {
     private var channelCount = 0
     private var encoding = 0
 
-    /** Routes this tee to [sink] from the next buffer on; null drops everything. */
-    fun attach(sink: TeeAudioProcessor.AudioBufferSink?) {
-        route = sink?.let(::Route)
+    /**
+     * Routes this tee to [sink] from the next buffer on; null drops everything. [replayFormat] false
+     * skips the format replay, for a re-route between sinks that never need it: replaying into the
+     * FIFO sink would discard whatever its pause gate still holds.
+     */
+    fun attach(sink: TeeAudioProcessor.AudioBufferSink?, replayFormat: Boolean = true) {
+        route = sink?.let { Route(it).apply { configured = !replayFormat } }
     }
 
     override fun flush(sampleRateHz: Int, channelCount: Int, encoding: Int) {

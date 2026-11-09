@@ -921,7 +921,8 @@ class PlayerViewModel @Inject constructor(
                 performer = audioMeta.tagArtist ?: track.performer,
             )
             _activeDownloadProgress.value = null
-            _positionState.value = 0L
+            // ~0 at a gapless join, but the fade length after a crossfade handoff.
+            _positionState.value = controller?.currentPosition ?: 0L
             _uiState.value = _uiState.value.copy(
                 track = displayTrack,
                 albumArt = albumArt,
