@@ -4,6 +4,11 @@ import android.media.MediaExtractor
 import android.media.MediaFormat
 import android.media.MediaMetadataRetriever
 import org.jaudiotagger.audio.AudioFileIO
+import org.jaudiotagger.tag.Tag
+import org.jaudiotagger.tag.TagTextField
+import org.jaudiotagger.tag.id3.AbstractID3v2Frame
+import org.jaudiotagger.tag.id3.framebody.FrameBodyTXXX
+import org.jaudiotagger.tag.mp4.field.Mp4TagReverseDnsField
 import java.io.File
 import javax.inject.Inject
 import javax.inject.Singleton
@@ -94,25 +99,14 @@ class AudioMetadataReader @Inject constructor() {
     }
 
     /**
-     * REPLAYGAIN_TRACK_GAIN (dB) and, when present, REPLAYGAIN_TRACK_PEAK (Vorbis comment / ID3 TXXX / MP4 freeform) - the gain a
-     * tagger already computed, so volume normalization can use it directly instead of decoding
-     * and analyzing the whole file. Null when absent or unparseable, which is common for
-     * Telegram-sourced uploads (not curated rips) - AudioAnalyzer.measureLoudness is the
-     * fallback for those. jaudiotagger 3.0.1 has no FieldKey.REPLAYGAIN_TRACK_GAIN (its FieldKey
-     * enum predates wide ReplayGain support), so this reads the raw custom-field key directly -
-     * the same lookup Tag.getFirst(FieldKey) does internally for mapped fields, just for an
-     * unmapped one; works uniformly across Vorbis comment (FLAC/Opus/OGG), ID3 TXXX (MP3), and
-     * MP4 freeform atoms. Format of the value varies by tagger ("-6.5 dB", "-6.5dB", "-6.5") -
-     * strip any trailing unit before parsing.
+     * REPLAYGAIN_TRACK_GAIN (dB) and, when present, REPLAYGAIN_TRACK_PEAK - the gain a tagger already
+     * computed, so normalization can skip decoding the whole file. Null when absent or unparseable,
+     * which is common for Telegram uploads; AudioAnalyzer.measureLoudness is the fallback. See
+     * [replayGainFrom] for how each tag format stores the keys.
      */
     fun readReplayGain(path: String): ReplayGain? = runCatching {
-        val tag = AudioFileIO.read(File(path)).tag ?: return@runCatching null
-        val gain = tag.getFirst("REPLAYGAIN_TRACK_GAIN")?.let(::parseNumber) ?: return@runCatching null
-        // Peak is linear full scale ("0.987654"); optional, and only used to cap a boost.
-        ReplayGain(gain, tag.getFirst("REPLAYGAIN_TRACK_PEAK")?.let(::parseNumber))
+        AudioFileIO.read(File(path)).tag?.let(::replayGainFrom)
     }.getOrNull()
-
-    private fun parseNumber(raw: String): Float? = raw.trim().removeSuffix("dB").removeSuffix("db").removeSuffix("DB").trim().takeIf { it.isNotEmpty() }?.toFloatOrNull()
 
     private data class ExtractorResult(
         val codec: String?,
@@ -187,3 +181,32 @@ class AudioMetadataReader @Inject constructor() {
         else -> ext.uppercase().takeIf { ext.isNotBlank() }
     }
 }
+
+/**
+ * REPLAYGAIN_TRACK_GAIN / _PEAK from whatever tag format the file uses. Tag.getFirst(String) only
+ * finds these in Vorbis comments (FLAC, Ogg, Opus): in ID3v2 the string is matched against the
+ * frame id, so the TXXX frame whose DESCRIPTION is the key is never found, and in MP4 the key is
+ * the descriptor of a reverse-DNS ("----") atom. Walk every field and match by the key each format
+ * actually stores, case-insensitively (taggers write both cases).
+ */
+internal fun replayGainFrom(tag: Tag): ReplayGain? {
+    var gain: Float? = null
+    var peak: Float? = null
+    for (field in tag.fields) {
+        val (key, value) = when (field) {
+            is AbstractID3v2Frame -> (field.body as? FrameBodyTXXX)?.let { it.description to it.firstTextValue } ?: continue
+            is Mp4TagReverseDnsField -> field.descriptor to field.content
+            is TagTextField -> field.id to field.content
+            else -> continue
+        }
+        when (key?.uppercase()) {
+            "REPLAYGAIN_TRACK_GAIN" -> if (gain == null) gain = value?.let(::parseReplayGainNumber)
+            "REPLAYGAIN_TRACK_PEAK" -> if (peak == null) peak = value?.let(::parseReplayGainNumber)
+        }
+    }
+    // Peak is linear full scale ("0.987654"); optional, and only used to cap a boost.
+    return gain?.let { ReplayGain(it, peak) }
+}
+
+// Values vary by tagger: "-6.5 dB", "-6.5dB", "-6.5".
+private fun parseReplayGainNumber(raw: String): Float? = raw.trim().removeSuffix("dB").removeSuffix("db").removeSuffix("DB").trim().takeIf { it.isNotEmpty() }?.toFloatOrNull()
