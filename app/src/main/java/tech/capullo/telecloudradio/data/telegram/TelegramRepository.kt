@@ -67,23 +67,23 @@ class TelegramRepository @Inject constructor(
     // Removes tracks that no longer exist in the chat: DB rows, downloaded files,
     // and analysis artifacts. Emits tracksDeleted so live queues drop them too.
     suspend fun removeTracks(chatId: Long, ids: List<Long>): List<Long> {
-        val existing = dao.getByIds(ids).filter { it.chatId == chatId }
+        val existing = dao.getByIds(chatId, ids)
         if (existing.isEmpty()) return emptyList()
         existing.forEach { row ->
             row.localPath?.let { File(it).delete() }
-            analysisDao.get(row.messageId)?.spectrogramPath?.let { File(it).delete() }
-            analysisDao.delete(row.messageId)
-            trackGainDao.delete(row.messageId)
+            analysisDao.get(chatId, row.messageId)?.spectrogramPath?.let { File(it).delete() }
+            analysisDao.delete(chatId, row.messageId)
+            trackGainDao.delete(chatId, row.messageId)
         }
         val removedIds = existing.map { it.messageId }
-        dao.deleteByIds(removedIds)
+        dao.deleteByIds(chatId, removedIds)
         _tracksDeleted.tryEmit(chatId to removedIds)
         return removedIds
     }
 
     private suspend fun insertIncomingMessage(msg: TelegramMessage): Boolean {
         if (msg.audio == null) return false
-        if (dao.exists(msg.id) > 0) return false // already synced
+        if (dao.exists(msg.chatId, msg.id) > 0) return false // already synced
         // Only accept chats we've synced before; reuse their station/groupType
         val known = dao.getAnyForChat(msg.chatId) ?: return false
         val station = known.station ?: return false
@@ -155,7 +155,7 @@ class TelegramRepository @Inject constructor(
 
     suspend fun refreshReactions(chatId: Long, messageId: Long): String? {
         val reactions = client.getMessageReactions(chatId, messageId)
-        dao.updateReactions(messageId, reactions)
+        dao.updateReactions(chatId, messageId, reactions)
         return reactions
     }
 
@@ -168,7 +168,7 @@ class TelegramRepository @Inject constructor(
     ): MessageReactionsInfo {
         client.setOwnReaction(chatId, messageId, emoji)
         val info = client.getReactionsInfo(chatId, messageId)
-        dao.updateReactions(messageId, info.summary)
+        dao.updateReactions(chatId, messageId, info.summary)
         return info
     }
 

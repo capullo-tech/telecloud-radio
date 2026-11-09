@@ -7,6 +7,7 @@ import android.graphics.BitmapFactory
 import android.media.MediaMetadataRetriever
 import android.net.Uri
 import android.os.Build
+import android.os.Bundle
 import android.os.Environment
 import android.provider.MediaStore
 import androidx.lifecycle.ViewModel
@@ -33,6 +34,7 @@ import kotlinx.coroutines.withContext
 import tech.capullo.source.telegram.data.telegram.MessageReactionsInfo
 import tech.capullo.telecloudradio.data.ConnectivityMonitor
 import tech.capullo.telecloudradio.data.SettingsRepository
+import tech.capullo.telecloudradio.data.TrackKey
 import tech.capullo.telecloudradio.data.db.AudioAnalysisDao
 import tech.capullo.telecloudradio.data.db.AudioAnalysisEntity
 import tech.capullo.telecloudradio.data.db.MediaMessageEntity
@@ -260,12 +262,12 @@ class PlayerViewModel @Inject constructor(
                     // instant the download returns (before playback is prepared), so nulling it here
                     // would snap the ring back to empty mid-load. playTrack owns resetting it to null
                     // at the start of a load and to 1f on completion, so the ring lands full.
-                    val activeProgress = downloadManager.activeMessageId?.let { map[it] }
+                    val activeProgress = downloadManager.activeTrack?.let { map[it] }
                     if (activeProgress != null) {
                         _activeDownloadProgress.emitProgress(activeProgress)
                     }
-                    val nextId = nextIndex()?.let { playlist.getOrNull(it)?.messageId }
-                    val progress = nextId?.let { map[it] }
+                    val next = nextIndex()?.let { playlist.getOrNull(it) }
+                    val progress = next?.let { map[TrackKey(it.chatId, it.messageId)] }
                     if (progress != null) {
                         hadNextEntry = true
                         _nextDownloadProgress.emitProgress(progress)
@@ -316,11 +318,11 @@ class PlayerViewModel @Inject constructor(
             readinessJob?.cancel()
             readinessJob = viewModelScope.launch {
                 val ni = nextIndex()
-                val nextId = ni?.let { playlist.getOrNull(it)?.messageId }
+                val next = ni?.let { playlist.getOrNull(it) }
                 _nextDownloadProgress.value =
-                    nextId?.let { downloadManager.downloadProgress.value[it] }
+                    next?.let { downloadManager.downloadProgress.value[TrackKey(it.chatId, it.messageId)] }
                 _uiState.value = _uiState.value.copy(
-                    nextTrackReady = nextId != null && downloadManager.isDownloaded(nextId),
+                    nextTrackReady = next != null && downloadManager.isDownloaded(next.chatId, next.messageId),
                 )
             }
         }
@@ -826,10 +828,10 @@ class PlayerViewModel @Inject constructor(
         enqueueJob = viewModelScope.launch {
             // Not downloaded yet: bail quietly. prefetchAhead's own loop calls syncEnqueuedNext
             // again right after this file lands, which retries.
-            val path = downloadManager.getCachedPath(track.messageId) ?: return@launch
+            val path = downloadManager.getCachedPath(track.chatId, track.messageId) ?: return@launch
             val (albumArt, audioMeta) = withContext(Dispatchers.IO) {
                 val meta = audioMetadataReader.read(path)
-                Pair(squareCropArt(extractAlbumArt(path) ?: albumArtFetcher.cached(track.messageId)), meta)
+                Pair(squareCropArt(extractAlbumArt(path) ?: albumArtFetcher.cached(track.chatId, track.messageId)), meta)
             }
             // The playlist/current position may have moved on while this suspended (reorder,
             // filter, explicit skip) - re-validate before committing instead of staging a stale item.
@@ -843,6 +845,7 @@ class PlayerViewModel @Inject constructor(
                 .setArtist(displayTrack.performer)
                 .setStation(chatTitle.takeIf { it.isNotBlank() })
                 .apply { albumArt?.let { setArtworkData(it, MediaMetadata.PICTURE_TYPE_FRONT_COVER) } }
+                .setExtras(Bundle().apply { putLong(PlaybackService.EXTRA_CHAT_ID, track.chatId) })
                 .build()
             controller?.addMediaItem(
                 MediaItem.Builder()
@@ -886,13 +889,13 @@ class PlayerViewModel @Inject constructor(
             ?: playlist.indexOfFirst { it.messageId == messageId }.takeIf { it >= 0 }
             ?: return
         val track = playlist[index]
-        val path = downloadManager.getCachedPath(track.messageId) ?: return
+        val path = downloadManager.getCachedPath(track.chatId, track.messageId) ?: return
         currentIndex = index
-        downloadManager.activeMessageId = track.messageId
+        downloadManager.activeTrack = TrackKey(track.chatId, track.messageId)
         viewModelScope.launch {
             val (albumArt, audioMeta) = withContext(Dispatchers.IO) {
                 val meta = audioMetadataReader.read(path)
-                Pair(squareCropArt(extractAlbumArt(path) ?: albumArtFetcher.cached(track.messageId)), meta)
+                Pair(squareCropArt(extractAlbumArt(path) ?: albumArtFetcher.cached(track.chatId, track.messageId)), meta)
             }
             val displayTrack = track.copy(
                 title = audioMeta.tagTitle ?: track.title,
@@ -1023,20 +1026,21 @@ class PlayerViewModel @Inject constructor(
         val track = _uiState.value.track ?: return
         _uiState.value = _uiState.value.copy(isAnalyzing = true)
         viewModelScope.launch {
-            val cached = audioAnalysisDao.get(track.messageId)
+            val cached = audioAnalysisDao.get(track.chatId, track.messageId)
             if (cached != null) {
                 _uiState.value = _uiState.value.copy(isAnalyzing = false, audioAnalysis = cached)
                 return@launch
             }
-            val path = downloadManager.getCachedPath(track.messageId)
+            val path = downloadManager.getCachedPath(track.chatId, track.messageId)
                 ?: downloadManager.ensureDownloaded(track.chatId, track.messageId)
             if (path != null) {
-                val spectFile = downloadManager.spectrogramFile(track.messageId)
+                val spectFile = downloadManager.spectrogramFile(track.chatId, track.messageId)
                 val result = withContext(Dispatchers.Default) {
                     audioAnalyzer.analyze(path, track.mimeType, spectFile)
                 }
                 if (result != null) {
                     val entity = AudioAnalysisEntity(
+                        chatId = track.chatId,
                         messageId = track.messageId,
                         peakDb = result.peakDb,
                         rmsDb = result.rmsDb,
@@ -1076,7 +1080,7 @@ class PlayerViewModel @Inject constructor(
     fun downloadCurrentTrack() {
         val track = _uiState.value.track ?: return
         viewModelScope.launch {
-            val path = downloadManager.getCachedPath(track.messageId)
+            val path = downloadManager.getCachedPath(track.chatId, track.messageId)
                 ?: downloadManager.ensureDownloaded(track.chatId, track.messageId)
                 ?: return@launch
             withContext(Dispatchers.IO) {
@@ -1161,13 +1165,13 @@ class PlayerViewModel @Inject constructor(
             _uiState.value.copy(isLoading = true)
         }
 
-        downloadManager.activeMessageId = track.messageId
+        downloadManager.activeTrack = TrackKey(track.chatId, track.messageId)
         val path = downloadManager.ensureDownloaded(track.chatId, track.messageId)
         if (path == null) {
             // Lazy deletion fallback: if the download failed because the message was
             // deleted from the chat, the row is already purged - skip to the next
             // track instead of stalling
-            if (!playlistRepository.exists(track.messageId)) {
+            if (!playlistRepository.exists(track.chatId, track.messageId)) {
                 _downloadToast.tryEmit("Removed from chat · skipping")
                 removeDeletedFromQueue(setOf(track.messageId))
                 if (playlist.isNotEmpty()) {
@@ -1200,7 +1204,7 @@ class PlayerViewModel @Inject constructor(
             // Embedded picture first, then previously fetched online art. Square-crop it so the
             // lock-screen/notification artwork and the snapcast/web art aren't stretched: embedded
             // covers can be any aspect ratio (online-fetched art is already square → no-op).
-            Pair(squareCropArt(extractAlbumArt(path) ?: albumArtFetcher.cached(track.messageId)), meta)
+            Pair(squareCropArt(extractAlbumArt(path) ?: albumArtFetcher.cached(track.chatId, track.messageId)), meta)
         }
         val displayTrack = track.copy(
             title = audioMeta.tagTitle ?: track.title,
@@ -1234,6 +1238,7 @@ class PlayerViewModel @Inject constructor(
         if (albumArt == null && connectivityMonitor.isOnline.value) {
             viewModelScope.launch {
                 val fetched = albumArtFetcher.fetch(
+                    chatId = track.chatId,
                     messageId = track.messageId,
                     artist = audioMeta.tagArtist ?: track.performer,
                     title = audioMeta.tagTitle ?: track.title,
@@ -1253,6 +1258,9 @@ class PlayerViewModel @Inject constructor(
             .setArtist(displayTrack.performer)
             .setStation(chatTitle.takeIf { it.isNotBlank() })
             .apply { albumArt?.let { setArtworkData(it, MediaMetadata.PICTURE_TYPE_FRONT_COVER) } }
+            // The service needs the chat to look up this track's gain: mediaId alone is the
+            // messageId, which only identifies a track within one chat.
+            .setExtras(Bundle().apply { putLong(PlaybackService.EXTRA_CHAT_ID, track.chatId) })
             .build()
         // setMediaItem replaces the whole controller queue (including any item staged by a
         // previous syncEnqueuedNext) with just this one - drop the stale tracking var to match.
@@ -1322,22 +1330,22 @@ class PlayerViewModel @Inject constructor(
             prefetchJob?.cancel()
             // Pin the current + upcoming tracks so enforceBuffer (which runs as each prefetch lands)
             // can't evict a track we just prefetched - the window matches the loop below.
-            downloadManager.protectedMessageIds =
-                w.mapNotNull { playlist.getOrNull(it)?.messageId }.toSet()
+            downloadManager.protectedTracks =
+                w.mapNotNull { playlist.getOrNull(it)?.let { t -> TrackKey(t.chatId, t.messageId) } }.toSet()
             w
         }
         lastPrefetchWindow = window
         prefetchJob = viewModelScope.launch {
             for (i in window.drop(1)) {
                 val t = playlist[i]
-                val path = downloadManager.getCachedPath(t.messageId)
+                val path = downloadManager.getCachedPath(t.chatId, t.messageId)
                     ?: downloadManager.ensureDownloaded(t.chatId, t.messageId)
                 refreshNextTrackState()
                 // The file for a gapless-staging target (nextIndexForAdvance) may not have existed
                 // on syncEnqueuedNext's earlier attempt; retry now that it (might have) landed.
                 if (path != null && i == nextIndexForAdvance()) syncEnqueuedNext()
                 // Pre-fetch online art too, so the lock screen has it at play start
-                if (path != null && albumArtFetcher.cached(t.messageId) == null &&
+                if (path != null && albumArtFetcher.cached(t.chatId, t.messageId) == null &&
                     connectivityMonitor.isOnline.value
                 ) {
                     val (embedded, meta) = withContext(Dispatchers.IO) {
@@ -1345,6 +1353,7 @@ class PlayerViewModel @Inject constructor(
                     }
                     if (embedded == null) {
                         albumArtFetcher.fetch(
+                            chatId = t.chatId,
                             messageId = t.messageId,
                             artist = meta.tagArtist ?: t.performer,
                             title = meta.tagTitle ?: t.title,

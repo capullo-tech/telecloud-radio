@@ -576,9 +576,12 @@ class PlaybackService : MediaSessionService() {
                 gainJob?.cancel()
                 gainProcessor.gain = 1f
                 val messageId = mediaItem?.mediaId?.toLongOrNull()
-                if (messageId != null) {
+                val chatId = mediaItem?.mediaMetadata?.extras
+                    ?.takeIf { it.containsKey(EXTRA_CHAT_ID) }
+                    ?.getLong(EXTRA_CHAT_ID)
+                if (messageId != null && chatId != null) {
                     gainJob = serviceScope.launch {
-                        trackGainDao.observe(messageId).collect { row -> gainProcessor.gain = row?.gainLinear ?: 1f }
+                        trackGainDao.observe(chatId, messageId).collect { row -> gainProcessor.gain = row?.gainLinear ?: 1f }
                     }
                 }
             }
@@ -800,6 +803,10 @@ class PlaybackService : MediaSessionService() {
          *  MainActivity's dbg hook is the only way in: the app holds a MediaController, which
          *  carries transport commands only. */
         const val ACTION_CALIBRATE = "tech.capullo.telecloudradio.CALIBRATE"
+
+        /** [MediaMetadata.extras] key carrying the track's chat: the mediaId is the messageId,
+         *  which is only unique within one chat, and the gain lookup needs both. */
+        const val EXTRA_CHAT_ID = "chatId"
 
         private const val TAG = "PlaybackService"
 

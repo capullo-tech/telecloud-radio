@@ -10,15 +10,15 @@ interface AudioAnalysisDao {
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     suspend fun insert(analysis: AudioAnalysisEntity)
 
-    @Query("SELECT * FROM audio_analysis WHERE messageId = :messageId")
-    suspend fun get(messageId: Long): AudioAnalysisEntity?
+    @Query("SELECT * FROM audio_analysis WHERE chatId = :chatId AND messageId = :messageId")
+    suspend fun get(chatId: Long, messageId: Long): AudioAnalysisEntity?
 
-    @Query("DELETE FROM audio_analysis WHERE messageId = :messageId")
-    suspend fun delete(messageId: Long)
+    @Query("DELETE FROM audio_analysis WHERE chatId = :chatId AND messageId = :messageId")
+    suspend fun delete(chatId: Long, messageId: Long)
 
     @Query("DELETE FROM audio_analysis")
     suspend fun deleteAll()
 
-    @Query("DELETE FROM audio_analysis WHERE messageId IN (:ids)")
-    suspend fun deleteByIds(ids: List<Long>)
+    @Query("DELETE FROM audio_analysis WHERE chatId = :chatId")
+    suspend fun deleteByChat(chatId: Long)
 }

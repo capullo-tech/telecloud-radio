@@ -26,8 +26,8 @@ interface MediaMessageDao {
     @Query("SELECT MAX(messageId) FROM media_messages WHERE chatId = :chatId")
     suspend fun getLatestMessageId(chatId: Long): Long?
 
-    @Query("SELECT COUNT(*) FROM media_messages WHERE messageId = :messageId")
-    suspend fun exists(messageId: Long): Int
+    @Query("SELECT COUNT(*) FROM media_messages WHERE chatId = :chatId AND messageId = :messageId")
+    suspend fun exists(chatId: Long, messageId: Long): Int
 
     @Query("SELECT * FROM media_messages WHERE chatId = :chatId AND station IS NOT NULL LIMIT 1")
     suspend fun getAnyForChat(chatId: Long): MediaMessageEntity?
@@ -40,23 +40,27 @@ interface MediaMessageDao {
     )
     suspend fun getTotalSize(chatId: Long): Long?
 
-    @Query("SELECT localPath FROM media_messages WHERE messageId = :messageId")
-    suspend fun getLocalPath(messageId: Long): String?
+    @Query("SELECT localPath FROM media_messages WHERE chatId = :chatId AND messageId = :messageId")
+    suspend fun getLocalPath(chatId: Long, messageId: Long): String?
 
-    @Query("UPDATE media_messages SET localPath = :path WHERE messageId = :messageId")
-    suspend fun updateLocalPath(messageId: Long, path: String?)
+    @Query(
+        "UPDATE media_messages SET localPath = :path WHERE chatId = :chatId AND messageId = :messageId",
+    )
+    suspend fun updateLocalPath(chatId: Long, messageId: Long, path: String?)
 
-    @Query("UPDATE media_messages SET reactions = :reactions WHERE messageId = :messageId")
-    suspend fun updateReactions(messageId: Long, reactions: String?)
+    @Query(
+        "UPDATE media_messages SET reactions = :reactions WHERE chatId = :chatId AND messageId = :messageId",
+    )
+    suspend fun updateReactions(chatId: Long, messageId: Long, reactions: String?)
 
     @Query("SELECT localPath FROM media_messages WHERE localPath IS NOT NULL")
     suspend fun getAllLocalPaths(): List<String>
 
-    @Query("SELECT * FROM media_messages WHERE messageId IN (:ids)")
-    suspend fun getByIds(ids: List<Long>): List<MediaMessageEntity>
+    @Query("SELECT * FROM media_messages WHERE chatId = :chatId AND messageId IN (:ids)")
+    suspend fun getByIds(chatId: Long, ids: List<Long>): List<MediaMessageEntity>
 
-    @Query("DELETE FROM media_messages WHERE messageId IN (:ids)")
-    suspend fun deleteByIds(ids: List<Long>)
+    @Query("DELETE FROM media_messages WHERE chatId = :chatId AND messageId IN (:ids)")
+    suspend fun deleteByIds(chatId: Long, ids: List<Long>)
 
     @Query("DELETE FROM media_messages")
     suspend fun deleteAll()
