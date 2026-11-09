@@ -16,21 +16,21 @@ import javax.inject.Singleton
 /**
  * Fetches album art for tracks without an embedded picture: Deezer first,
  * iTunes Search as fallback (both keyless). Results - including "nothing
- * found" - are cached on disk per messageId and evicted together with the
- * track file.
+ * found" - are cached on disk per (chatId, messageId) and evicted together
+ * with the track file.
  */
 @Singleton
 class AlbumArtFetcher @Inject constructor(@ApplicationContext private val context: Context) {
     private val cacheDir: File get() = File(context.filesDir, "artcache")
 
-    private fun artFile(messageId: Long) = File(cacheDir, "art_$messageId.jpg")
-    private fun noneMarker(messageId: Long) = File(cacheDir, "art_$messageId.none")
+    private fun artFile(chatId: Long, messageId: Long) = File(cacheDir, "art_${chatId}_$messageId.jpg")
+    private fun noneMarker(chatId: Long, messageId: Long) = File(cacheDir, "art_${chatId}_$messageId.none")
 
-    fun cached(messageId: Long): ByteArray? = artFile(messageId).takeIf { it.exists() }?.readBytes()
+    fun cached(chatId: Long, messageId: Long): ByteArray? = artFile(chatId, messageId).takeIf { it.exists() }?.readBytes()
 
-    fun evict(messageId: Long) {
-        artFile(messageId).delete()
-        noneMarker(messageId).delete()
+    fun evict(chatId: Long, messageId: Long) {
+        artFile(chatId, messageId).delete()
+        noneMarker(chatId, messageId).delete()
     }
 
     fun clearAll() {
@@ -38,17 +38,18 @@ class AlbumArtFetcher @Inject constructor(@ApplicationContext private val contex
     }
 
     suspend fun fetch(
+        chatId: Long,
         messageId: Long,
         artist: String?,
         title: String?,
         fileName: String?,
     ): ByteArray? = withContext(Dispatchers.IO) {
-        cached(messageId)?.let { return@withContext it }
-        if (noneMarker(messageId).exists()) return@withContext null
+        cached(chatId, messageId)?.let { return@withContext it }
+        if (noneMarker(chatId, messageId).exists()) return@withContext null
 
         val query = resolveQuery(artist, title, fileName)
         if (query == null) {
-            markNone(messageId)
+            markNone(chatId, messageId)
             return@withContext null
         }
         // Plain full-text attempts (field-qualified queries break on reversed
@@ -73,7 +74,7 @@ class AlbumArtFetcher @Inject constructor(@ApplicationContext private val contex
                     val bytes = source(text)
                     if (bytes != null) {
                         cacheDir.mkdirs()
-                        artFile(messageId).writeBytes(bytes)
+                        artFile(chatId, messageId).writeBytes(bytes)
                         Log.d(
                             "TeleCloud",
                             "art fetched for $messageId (${bytes.size} bytes, q=\"$text\")",
@@ -86,13 +87,13 @@ class AlbumArtFetcher @Inject constructor(@ApplicationContext private val contex
                 }
             }
         }
-        if (definitiveMiss) markNone(messageId)
+        if (definitiveMiss) markNone(chatId, messageId)
         null
     }
 
-    private fun markNone(messageId: Long) {
+    private fun markNone(chatId: Long, messageId: Long) {
         cacheDir.mkdirs()
-        noneMarker(messageId).writeBytes(ByteArray(0))
+        noneMarker(chatId, messageId).writeBytes(ByteArray(0))
     }
 
     // ---- query building ----

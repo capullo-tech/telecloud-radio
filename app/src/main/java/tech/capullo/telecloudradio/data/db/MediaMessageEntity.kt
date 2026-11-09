@@ -1,11 +1,11 @@
 package tech.capullo.telecloudradio.data.db
 
 import androidx.room.Entity
-import androidx.room.PrimaryKey
 
-@Entity(tableName = "media_messages")
+// Keyed by (chatId, messageId): TDLib message ids repeat across chats.
+@Entity(tableName = "media_messages", primaryKeys = ["chatId", "messageId"])
 data class MediaMessageEntity(
-    @PrimaryKey val messageId: Long,
+    val messageId: Long,
     val chatId: Long,
     val date: String,
     val senderId: Long?,

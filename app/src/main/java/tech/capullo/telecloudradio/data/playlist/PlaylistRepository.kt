@@ -15,7 +15,7 @@ class PlaylistRepository @Inject constructor(private val dao: MediaMessageDao) {
 
     suspend fun getTotalSize(chatId: Long): Long = dao.getTotalSize(chatId) ?: 0L
 
-    suspend fun exists(messageId: Long): Boolean = dao.exists(messageId) > 0
+    suspend fun exists(chatId: Long, messageId: Long): Boolean = dao.exists(chatId, messageId) > 0
 
     suspend fun getStations() = dao.getStations()
 }

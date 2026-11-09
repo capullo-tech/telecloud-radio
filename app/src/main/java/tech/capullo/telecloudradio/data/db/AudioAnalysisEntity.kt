@@ -1,11 +1,11 @@
 package tech.capullo.telecloudradio.data.db
 
 import androidx.room.Entity
-import androidx.room.PrimaryKey
 
-@Entity(tableName = "audio_analysis")
+@Entity(tableName = "audio_analysis", primaryKeys = ["chatId", "messageId"])
 data class AudioAnalysisEntity(
-    @PrimaryKey val messageId: Long,
+    val chatId: Long,
+    val messageId: Long,
     val peakDb: Float,
     val rmsDb: Float,
     val dynamicRange: Float,

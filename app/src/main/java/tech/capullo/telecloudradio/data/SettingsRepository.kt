@@ -44,6 +44,20 @@ class SettingsRepository @Inject constructor(@ApplicationContext context: Contex
         _favoriteStationIds.value = next
     }
 
+    // Chats that have had one full-history sync since tracks were keyed by (chat, message).
+    // Before DB v7 a track whose message id was already used in another chat was silently skipped
+    // at import, and the incremental sync never looks below a chat's newest stored id, so each chat
+    // needs one full pass to pick those tracks up. Synchronized: syncs for different chats can run
+    // concurrently (station list + player).
+    @Synchronized
+    fun needsFullResync(chatId: Long): Boolean = chatId.toString() !in prefs.getStringSet("full_resync_done_v7", emptySet())!!
+
+    @Synchronized
+    fun markFullResyncDone(chatId: Long) {
+        val next = prefs.getStringSet("full_resync_done_v7", emptySet())!! + chatId.toString()
+        prefs.edit().putStringSet("full_resync_done_v7", next).apply()
+    }
+
     // Sleep timer duration in minutes; the timer itself lives in PlayerViewModel
     var sleepTimerMinutes: Int
         get() = prefs.getInt("sleep_timer_minutes", 30)

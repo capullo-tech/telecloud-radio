@@ -26,6 +26,7 @@ object DatabaseModule {
             MediaMessageDatabase.MIGRATION_3_4,
             MediaMessageDatabase.MIGRATION_4_5,
             MediaMessageDatabase.MIGRATION_5_6,
+            MediaMessageDatabase.MIGRATION_6_7,
         )
         // Wipes and recreates DB on downgrade (dev-time safety net for intermediate builds)
         .fallbackToDestructiveMigration(dropAllTables = true)
