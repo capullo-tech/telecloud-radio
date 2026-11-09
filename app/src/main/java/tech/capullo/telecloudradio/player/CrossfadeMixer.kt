@@ -63,7 +63,7 @@ class RoutableSink : TeeAudioProcessor.AudioBufferSink {
  * Crossfades between two players' PCM into one broadcast [output] (the snapserver FIFO sink).
  *
  * Every player that can be part of a crossfade writes its tee into its own [Lane]. One lane is the
- * lead: outside a fade its PCM passes straight through to [output]. The incoming player's lane
+ * lead: outside a fade its PCM goes on to [output]. The incoming player's lane
  * ([prepareIncoming]) captures into a preallocated ring from its very first sample. During a fade
  * ([beginFade]) every lead buffer is mixed, frame for frame, with the same number of frames taken
  * from that ring, with equal-power gains (cos/sin, so loudness holds steady through the window).
@@ -72,16 +72,28 @@ class RoutableSink : TeeAudioProcessor.AudioBufferSink {
  * by its AudioTrack, so the window is exactly as long as the PCM it covers. When the count reaches
  * the window length, frames past it in the same buffer come from the ring alone, and the incoming
  * lane becomes the lead: the old lead's later buffers are dropped (nothing of the outgoing track is
- * heard after the window), and the new lead writes its unmixed ring backlog before its own next
- * buffer, so the incoming stream continues sample for sample. The handoff callback then lets the
- * service promote the player itself.
+ * heard after the window). The handoff callback then lets the service promote the player itself.
+ *
+ * At that point the new lead's ring still holds a backlog: what its player decoded during preroll
+ * (its AudioTrack's prefill, up to ~0.75 s), which a frame-for-frame mix never catches up on.
+ * Written out at once, it would hit the FIFO as one burst (the pipe holds ~0.34 s): once the pipe
+ * is full the write blocks the new lead's playback thread while its AudioTrack drains, and as
+ * nothing ever takes that extra back out of the pipe, every later handoff stacks another prefill on
+ * top. Instead the lead keeps the backlog as a fixed delay: each buffer it delivers joins the back
+ * of its ring and as many frames leave the front, so the incoming stream continues sample for
+ * sample, paced by its AudioTrack exactly like the outgoing one was, only behind its tee by the
+ * backlog. A flush of the lead (end of item, seek, stop) writes the backlog out first: the tail of
+ * a finished item still airs, and after a seek or skip the FIFO sink, paused by then, discards it
+ * with the rest of what it holds.
  *
  * Threading: lanes are fed on their players' playback threads; control calls come from the main
  * thread. [stateLock] guards the lane roles and the rings and is never held across an output
  * write. [outputLock] serializes output writes so the outgoing lane's last mixed buffer is always
- * written before the incoming lane's backlog; only lead lanes take it, so the incoming player's
- * capture never waits on the FIFO. Nothing on the audio path allocates: rings are sized up front
- * and mixed PCM goes through a reused scratch buffer that only grows if a buffer ever exceeds it.
+ * written before the incoming lane's first; only lead lanes take it, so the incoming player's
+ * capture never waits on the FIFO. A lead writes the front of its own ring straight to [output]
+ * outside [stateLock]: only its own playback thread appends to that ring, so the bytes stay put
+ * until the write returns. Nothing on the audio path allocates: rings are sized up front and mixed
+ * PCM goes through a reused scratch buffer that only grows if a buffer ever exceeds it.
  *
  * PCM is always 48000 Hz / 16-bit / stereo (LOCKSTEP with SnapserverProcess and the Sonic
  * resampler in every player's chain), so mixing is a plain per-sample sum.
@@ -95,8 +107,8 @@ class CrossfadeMixer(
 
     /** One player's way into the mixer; set as that player's FIFO tee destination. */
     inner class Lane internal constructor() : TeeAudioProcessor.AudioBufferSink {
-        // Capture ring, guarded by stateLock (written while this lane is incoming, read while it
-        // is mixed in or drained as the new lead).
+        // Ring, guarded by stateLock: the capture while this lane is incoming (read by the mix),
+        // and the delay it took over at the handoff while it is the lead.
         private val ring = ByteArray(laneCapacity)
         internal val ringView: ByteBuffer = ByteBuffer.wrap(ring)
         internal var readPos = 0
@@ -169,7 +181,10 @@ class CrossfadeMixer(
     /** A new lane with its own preallocated capture ring. Call off the audio thread. */
     fun newLane(): Lane = Lane()
 
-    /** Makes [lane] the one passed through to the output, ending any fade; null mutes every lane. */
+    /**
+     * Makes [lane] the one passed through to the output, ending any fade; null mutes every lane.
+     * Whatever the previous lead still delayed is never written.
+     */
     fun setLead(lane: Lane?) {
         synchronized(stateLock) {
             lead = lane
@@ -236,6 +251,11 @@ class CrossfadeMixer(
     /** True once [lane] carries the broadcast, i.e. a fade into it has handed off. */
     fun isLead(lane: Lane?): Boolean = synchronized(stateLock) { lane != null && lead === lane }
 
+    /** How far the broadcast runs behind the lead's tee: the backlog it took over at a handoff. */
+    fun leadDelayMs(): Long = synchronized(stateLock) {
+        (lead?.size ?: 0).toLong() / BYTES_PER_FRAME * 1000 / SAMPLE_RATE_HZ
+    }
+
     private fun laneBuffer(lane: Lane, buffer: ByteBuffer) {
         synchronized(stateLock) {
             if (lane === incoming) {
@@ -256,11 +276,14 @@ class CrossfadeMixer(
             if (lane !== lead) return
         }
         synchronized(outputLock) {
+            // The lead's stream ended or restarted (end of item, seek, stop, new item). What it
+            // still delays was delivered before the flush, so it goes out first: the tail of a
+            // finished item still airs, and after a seek or skip the FIFO sink, paused by then,
+            // discards it with the rest of what it holds.
+            writeDelayed(lane, Int.MAX_VALUE)
             synchronized(stateLock) {
                 if (lane !== lead) return
-                // The lead restarted its stream (seek, stop, new item): a fade or ramp across
-                // the old position, and any backlog from before, no longer lines up with it.
-                lane.clear()
+                // A fade or ramp across the old position no longer lines up with the new one.
                 if (fadeFrames > 0) {
                     incoming = null
                     clearFade()
@@ -273,48 +296,62 @@ class CrossfadeMixer(
 
     // outputLock held.
     private fun writeAsLead(lane: Lane, buffer: ByteBuffer) {
-        drainBacklog(lane)
-        var out = buffer
+        var out: ByteBuffer? = buffer
+        var delayedBytes = 0
         var handoff: Runnable? = null
         synchronized(stateLock) {
             if (lane !== lead) return
+            // Delayed since the handoff into this lane: the buffer joins the back of its ring and
+            // as many frames leave the front, so the output keeps this buffer's size and timing.
+            val delay = if (lane.size > 0) lane else null
+            delay?.append(buffer)
             val source = incoming
             if (fadeFrames > 0 && source != null) {
-                out = mixFade(buffer, source)
+                out = mixFade(buffer, delay, source)
                 if (fadeDone >= fadeFrames) {
                     handoff = onHandoff
+                    // Whatever this lane still delays is past the window: never heard.
+                    lane.clear()
                     lead = source
                     incoming = null
                     clearFade()
                 }
             } else if (rampFrames > 0) {
-                out = mixRamp(buffer)
+                out = mixRamp(buffer, delay)
+            } else if (delay != null) {
+                out = null
+                delayedBytes = buffer.remaining() - buffer.remaining() % BYTES_PER_FRAME
             }
         }
-        output.handleBuffer(out)
+        val mixed = out
+        if (mixed != null) output.handleBuffer(mixed) else writeDelayed(lane, delayedBytes)
         handoff?.run()
     }
 
-    // outputLock held. Writes what this lane captured while it was incoming and the mix hadn't
-    // consumed yet, so the stream continues exactly where the fade left it.
-    private fun drainBacklog(lane: Lane) {
-        while (true) {
+    // outputLock held. Writes up to [bytes] from the front of the lead's ring, straight from the
+    // ring: consumed before the write, but only this lane's own playback thread (the caller)
+    // appends to it, so the bytes stay put until the write returns.
+    private fun writeDelayed(lane: Lane, bytes: Int) {
+        var left = bytes
+        while (left > 0) {
             val view = synchronized(stateLock) {
-                if (lane !== lead || lane.size == 0) return
-                val len = minOf(lane.size, laneCapacity - lane.readPos)
+                if (lane !== lead) return
+                val len = minOf(left, lane.size, laneCapacity - lane.readPos)
+                if (len <= 0) return
                 lane.ringView.clear()
                 lane.ringView.position(lane.readPos)
                 lane.ringView.limit(lane.readPos + len)
-                // Consumed before the write: nothing appends to a lead lane, so the bytes stay put.
                 lane.consume(len)
+                left -= len
                 lane.ringView
             }
             output.handleBuffer(view)
         }
     }
 
-    // stateLock + outputLock held.
-    private fun mixFade(outgoing: ByteBuffer, source: Lane): ByteBuffer {
+    // stateLock + outputLock held. The lead's samples come from [delay] (its own ring) when it has
+    // one, else straight from [outgoing].
+    private fun mixFade(outgoing: ByteBuffer, delay: Lane?, source: Lane): ByteBuffer {
         val frames = outgoing.remaining() / BYTES_PER_FRAME
         val dst = scratchFor(frames * BYTES_PER_FRAME)
         var index = outgoing.position()
@@ -331,7 +368,8 @@ class CrossfadeMixer(
                 gIn = 1.0
             }
             repeat(CHANNELS) {
-                dst.putShort(mix(readSample(outgoing, index), gOut, source.pollSample(), gIn))
+                val leadSample = if (delay != null) delay.pollSample() else readSample(outgoing, index)
+                dst.putShort(mix(leadSample, gOut, source.pollSample(), gIn))
                 index += BYTES_PER_SAMPLE
             }
         }
@@ -340,8 +378,8 @@ class CrossfadeMixer(
         return dst
     }
 
-    // stateLock + outputLock held.
-    private fun mixRamp(outgoing: ByteBuffer): ByteBuffer {
+    // stateLock + outputLock held. [delay] as in mixFade.
+    private fun mixRamp(outgoing: ByteBuffer, delay: Lane?): ByteBuffer {
         val frames = outgoing.remaining() / BYTES_PER_FRAME
         val dst = scratchFor(frames * BYTES_PER_FRAME)
         val source = rampSource
@@ -353,8 +391,9 @@ class CrossfadeMixer(
             val gOut = rampOutFrom + (1.0 - rampOutFrom) * t
             val gIn = rampInFrom * (1.0 - t)
             repeat(CHANNELS) {
+                val leadSample = if (delay != null) delay.pollSample() else readSample(outgoing, index)
                 val incomingSample = if (ramping && source != null) source.pollSample() else 0
-                dst.putShort(mix(readSample(outgoing, index), gOut, incomingSample, gIn))
+                dst.putShort(mix(leadSample, gOut, incomingSample, gIn))
                 index += BYTES_PER_SAMPLE
             }
         }

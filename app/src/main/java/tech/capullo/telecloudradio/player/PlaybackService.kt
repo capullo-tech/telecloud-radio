@@ -909,6 +909,8 @@ class PlaybackService : MediaSessionService() {
         } else {
             if (deck.lane == null) return
             deck.lane = null
+            // Straight to the FIFO from the next buffer. Whatever the lane still delays since a
+            // crossfade handed off to it (at most its AudioTrack buffer, see CrossfadeMixer) is skipped.
             deck.fifoRoute.attach(sink)
             mixer?.setLead(null)
         }
@@ -1099,7 +1101,7 @@ class PlaybackService : MediaSessionService() {
         mediaSession?.let { if (it.player !== remoteListenPlayer) it.setPlayer(sessionPlayer) }
         outgoing.player.release()
         if (!playWhenReady) incoming.player.pause()
-        Log.d(TAG, "crossfade handed off to ${xf.target.chatId}/${xf.target.messageId}")
+        Log.d(TAG, "crossfade handed off to ${xf.target.chatId}/${xf.target.messageId}, broadcast ${mixer?.leadDelayMs()} ms behind its tee")
     }
 
     override fun onDestroy() {

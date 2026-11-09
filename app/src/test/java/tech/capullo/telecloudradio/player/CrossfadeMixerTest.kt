@@ -61,6 +61,26 @@ class CrossfadeMixerTest {
         }
     }
 
+    private val ramp = { f: Int -> f % 30_000 }
+
+    private data class Handoff(val out: RecordingSink, val mixer: CrossfadeMixer, val outgoing: CrossfadeMixer.Lane, val incoming: CrossfadeMixer.Lane)
+
+    // The incoming lane prerolls frames 0-2999 (ramp left, -ramp right), more than the fade will
+    // take from it. The 1000-frame window ends partway through the outgoing's second 768-frame
+    // buffer: 1536 frames out, the last 536 the incoming's alone, 1464 prerolled frames left over.
+    private fun handOffWithBacklog(): Handoff {
+        val out = RecordingSink()
+        val mixer = CrossfadeMixer(out)
+        val outgoing = mixer.newLane().also(mixer::setLead)
+        val incoming = mixer.newLane().also(mixer::prepareIncoming)
+        feed(incoming, 0, 3000, 700, ramp) { -ramp(it) }
+        assertTrue(mixer.beginFade(1000L, Runnable {}))
+        feed(outgoing, 0, 1536, 768, { MARKER }, { MARKER })
+        assertTrue(mixer.isLead(incoming))
+        assertEquals(1536, out.left.size)
+        return Handoff(out, mixer, outgoing, incoming)
+    }
+
     @Test
     fun `fade is equal power from full outgoing to full incoming`() {
         val out = RecordingSink()
@@ -90,34 +110,71 @@ class CrossfadeMixerTest {
     }
 
     @Test
-    fun `after the window only the incoming stream plays, sample for sample`() {
-        val out = RecordingSink()
-        val mixer = CrossfadeMixer(out)
-        val outgoing = mixer.newLane().also(mixer::setLead)
-        val incoming = mixer.newLane().also(mixer::prepareIncoming)
-        val marker = 12_345
-        val ramp = { f: Int -> f % 30_000 }
-        // Preroll backlog, captured before the fade starts.
-        feed(incoming, 0, 3000, 700, ramp) { -ramp(it) }
-        val window = 1000
-        assertTrue(mixer.beginFade(window.toLong(), Runnable {}))
-
-        // Two outgoing buffers: the window ends partway through the second.
-        feed(outgoing, 0, 1536, 768, { marker }, { marker })
-        assertTrue(mixer.isLead(incoming))
+    fun `after the window the incoming stream continues sample for sample, one buffer out per buffer in`() {
+        val (out, mixer, outgoing, incoming) = handOffWithBacklog()
         assertFalse("the handoff already happened", mixer.abortFade(outgoing))
         // The outgoing player keeps decoding until it is released: none of it may be heard.
-        feed(outgoing, 1536, 768, 768, { marker }, { marker })
+        feed(outgoing, 1536, 768, 768, { MARKER }, { MARKER })
         assertEquals(1536, out.left.size)
-        // Live incoming PCM arrives behind its own unmixed backlog.
+        val eventsAtHandoff = out.events.size
+
+        // The leftover preroll stays behind: each live buffer brings out exactly as much, so the
+        // broadcast keeps the incoming player's pace instead of taking the backlog in one burst.
         feed(incoming, 3000, 500, 250, ramp) { -ramp(it) }
 
-        assertEquals(marker, out.left[0])
-        assertEquals(3500, out.left.size)
-        for (j in window until 3500) {
+        assertEquals(listOf("buffer 250", "buffer 250"), out.events.drop(eventsAtHandoff))
+        assertEquals(MARKER, out.left[0])
+        for (j in 1000 until out.left.size) {
             assertEquals("left $j", ramp(j), out.left[j])
             assertEquals("right $j", -ramp(j), out.right[j])
         }
+    }
+
+    @Test
+    fun `a flush of the lead writes what it still delays first, then passes buffers straight through`() {
+        val (out, _, _, incoming) = handOffWithBacklog()
+        feed(incoming, 3000, 500, 250, ramp) { -ramp(it) }
+
+        incoming.flush(48_000, 2, C.ENCODING_PCM_16BIT)
+
+        // The end of the item: everything decoded before the flush airs, in order, ahead of it.
+        assertEquals("flush 48000/2/2", out.events.last())
+        assertEquals(3500, out.left.size)
+        for (j in 1000 until 3500) {
+            assertEquals("left $j", ramp(j), out.left[j])
+            assertEquals("right $j", -ramp(j), out.right[j])
+        }
+        // Nothing left to delay: the next item's buffers go out as they come.
+        feed(incoming, 0, 300, 300, { 7 }, { -7 })
+        assertEquals("buffer 300", out.events.last())
+        assertEquals(3800, out.left.size)
+        assertEquals(7, out.left.last())
+    }
+
+    @Test
+    fun `a delayed lead fades out from where its output was, and its leftover is never heard`() {
+        val (out, mixer, _, lead) = handOffWithBacklog()
+        feed(lead, 3000, 500, 250, ramp) { -ramp(it) }
+        val next = mixer.newLane().also(mixer::prepareIncoming)
+        feed(next, 0, 2000, 500, { 0 }, { 10_000 })
+        val window = 1000
+        assertTrue(mixer.beginFade(window.toLong(), Runnable {}))
+        val atFade = out.left.size
+
+        feed(lead, 3500, window, 500, ramp) { -ramp(it) }
+
+        assertTrue(mixer.isLead(next))
+        // The lead fades from the next frame it had delayed, not from its newest buffer.
+        for (j in 0 until window) {
+            val expected = ramp(atFade + j) * cos(j.toDouble() / window * PI / 2)
+            assertEquals("frame ${atFade + j}", expected, out.left[atFade + j].toDouble(), 1.0)
+        }
+        // What the old lead still held, and anything it decodes later, stays off the air.
+        feed(lead, 4500, 500, 500, ramp) { -ramp(it) }
+        feed(next, 2000, 500, 250, { 0 }, { 10_000 })
+        assertEquals(atFade + window + 500, out.left.size)
+        assertTrue(out.left.drop(atFade + window).all { it == 0 })
+        assertTrue(out.right.drop(atFade + window).all { it == 10_000 })
     }
 
     @Test
@@ -165,5 +222,10 @@ class CrossfadeMixerTest {
             listOf("flush 48000/2/2", "buffer 10", "buffer 10", "flush 44100/2/2", "buffer 10"),
             sink.events,
         )
+    }
+
+    private companion object {
+        // The outgoing stream in the handoff tests: any of it after the window is a bug.
+        const val MARKER = 12_345
     }
 }
