@@ -8,7 +8,8 @@ import androidx.room.Query
 @Dao
 interface MediaMessageDao {
     @Insert(onConflict = OnConflictStrategy.IGNORE)
-    suspend fun insertAll(messages: List<MediaMessageEntity>)
+    // Row id per message, -1 where it already existed (IGNORE).
+    suspend fun insertAll(messages: List<MediaMessageEntity>): List<Long>
 
     @Query("SELECT * FROM media_messages WHERE chatId = :chatId AND station IS NOT NULL")
     suspend fun getPlaylist(chatId: Long): List<MediaMessageEntity>

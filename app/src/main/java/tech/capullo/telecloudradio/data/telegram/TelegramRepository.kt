@@ -15,6 +15,7 @@ import tech.capullo.source.telegram.data.telegram.MessageReactionsInfo
 import tech.capullo.source.telegram.data.telegram.TelegramChat
 import tech.capullo.source.telegram.data.telegram.TelegramClient
 import tech.capullo.source.telegram.data.telegram.TelegramMessage
+import tech.capullo.telecloudradio.data.SettingsRepository
 import tech.capullo.telecloudradio.data.db.AudioAnalysisDao
 import tech.capullo.telecloudradio.data.db.MediaMessageDao
 import tech.capullo.telecloudradio.data.db.MediaMessageEntity
@@ -29,6 +30,7 @@ class TelegramRepository @Inject constructor(
     private val dao: MediaMessageDao,
     private val analysisDao: AudioAnalysisDao,
     private val trackGainDao: TrackGainDao,
+    private val settings: SettingsRepository,
 ) {
     val authState: StateFlow<AuthState> = client.authState
 
@@ -105,12 +107,17 @@ class TelegramRepository @Inject constructor(
     suspend fun downloadChatPhoto(fileId: Int): String? = client.downloadChatPhoto(fileId)
 
     suspend fun syncAudioMessages(chat: TelegramChat): Int {
-        val latestStored = dao.getLatestMessageId(chat.id) ?: 0L
+        // One full pass per chat after the v7 key change (see SettingsRepository.needsFullResync);
+        // inserts are IGNORE, so re-reading already stored tracks is harmless.
+        val fullResync = settings.needsFullResync(chat.id)
+        val latestStored = if (fullResync) 0L else dao.getLatestMessageId(chat.id) ?: 0L
         // Two passes: music messages + audio files sent as documents
-        return syncPass(chat, latestStored) { from -> client.getChatHistory(chat.id, from, 100) } +
+        val count = syncPass(chat, latestStored) { from -> client.getChatHistory(chat.id, from, 100) } +
             syncPass(chat, latestStored) { from ->
                 client.getChatDocumentHistory(chat.id, from, 100)
             }
+        if (fullResync) settings.markFullResyncDone(chat.id)
+        return count
     }
 
     private suspend fun syncPass(
@@ -124,8 +131,7 @@ class TelegramRepository @Inject constructor(
             val page = fetch(fetchFromId)
             val fresh = page.messages.filter { it.id > latestStored && it.audio != null }
             if (fresh.isNotEmpty()) {
-                dao.insertAll(fresh.map { it.toEntity(chat.title, chat.type.name) })
-                newCount += fresh.size
+                newCount += dao.insertAll(fresh.map { it.toEntity(chat.title, chat.type.name) }).count { it != -1L }
             }
             // nextFromMessageId is the raw pagination cursor (0 = end of history);
             // stop once it reaches already-synced territory
