@@ -6,7 +6,8 @@ import androidx.room.PrimaryKey
 // Deliberately a separate table from audio_analysis, not touched by DownloadManager.evict()'s
 // per-file cleanup: a computed gain is a property of the audio content (keyed by the stable
 // Telegram messageId), not of the locally cached file, so it survives cache eviction and doesn't
-// need recomputing when a track is re-downloaded later.
+// need recomputing when a track is re-downloaded later. Rows go when the TRACK goes: a message
+// deleted from its chat (TelegramRepository.removeTracks) or a library wipe (wipeLibrary).
 @Entity(tableName = "track_gain")
 data class TrackGainEntity(
     @PrimaryKey val messageId: Long,

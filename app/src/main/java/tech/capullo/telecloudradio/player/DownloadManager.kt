@@ -180,6 +180,7 @@ class DownloadManager @Inject constructor(
             File(context.filesDir, "spectrograms").deleteRecursively()
             albumArtFetcher.clearAll()
             analysisDao.deleteAll()
+            trackGainDao.deleteAll()
             dao.deleteAll()
         } else {
             dao.getLocalPathsForChat(chatId).forEach { File(it).delete() }
@@ -189,7 +190,10 @@ class DownloadManager @Inject constructor(
                 spectrogramFile(id).delete()
                 albumArtFetcher.evict(id)
             }
-            ids.chunked(500).forEach { analysisDao.deleteByIds(it) }
+            ids.chunked(500).forEach {
+                analysisDao.deleteByIds(it)
+                trackGainDao.deleteByIds(it)
+            }
             dao.deleteByChat(chatId)
         }
     }
