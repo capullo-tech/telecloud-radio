@@ -15,7 +15,9 @@ import androidx.media3.common.ForwardingPlayer
 import androidx.media3.common.MediaItem
 import androidx.media3.common.MediaMetadata
 import androidx.media3.common.MimeTypes
+import androidx.media3.common.PlaybackException
 import androidx.media3.common.Player
+import androidx.media3.common.Timeline
 import androidx.media3.common.audio.ChannelMixingAudioProcessor
 import androidx.media3.common.audio.ChannelMixingMatrix
 import androidx.media3.common.audio.SonicAudioProcessor
@@ -41,6 +43,7 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.map
@@ -61,6 +64,7 @@ import tech.capullo.audio.snapcast.firstArtist
 import tech.capullo.audio.tunnel.TunnelManager
 import tech.capullo.telecloudradio.MainActivity
 import tech.capullo.telecloudradio.data.SettingsRepository
+import tech.capullo.telecloudradio.data.TrackKey
 import tech.capullo.telecloudradio.data.playlist.ActiveTrackRepository
 import tech.capullo.telecloudradio.data.playlist.PlaybackCommand
 import tech.capullo.telecloudradio.snapcast.SnapcastManager
@@ -69,14 +73,29 @@ import tech.capullo.telecloudradio.util.renderAnnouncement
 import javax.inject.Inject
 
 /**
+ * The track a MediaItem plays: PlayerViewModel sets the message id as the mediaId and the chat in
+ * [PlaybackService.EXTRA_CHAT_ID]. Null for an item without both (e.g. the listen-in stand-in).
+ */
+fun MediaItem.trackKey(): TrackKey? {
+    val messageId = mediaId.toLongOrNull() ?: return null
+    val extras = mediaMetadata.extras ?: return null
+    if (!extras.containsKey(PlaybackService.EXTRA_CHAT_ID)) return null
+    return TrackKey(extras.getLong(PlaybackService.EXTRA_CHAT_ID), messageId)
+}
+
+/**
  * Playback + Snapcast broadcast service.
  *
  * Audio path: ExoPlayer decodes the track; the sink chain forces the PCM to
- * 48000:16:2 ([ChannelMixing → Sonic] ), applies stereo balance, then a
- * TeeAudioProcessor copies it into the snapserver FIFO. The AudioTrack output
- * stays (it paces playback and provides the position clock) but player volume
- * is 0 - the audible output on this device is the local snapclient, which is
+ * 48000:16:2 ([ChannelMixing → Sonic] ), applies stereo balance and the track's
+ * normalization gain, then a TeeAudioProcessor copies it into the snapserver FIFO. The
+ * AudioTrack output stays (it paces playback and provides the position clock) but player
+ * volume is 0 - the audible output on this device is the local snapclient, which is
  * perfectly in sync with every other Snapcast/web listener on the LAN.
+ *
+ * With crossfade on (Settings), the tee feeds a [CrossfadeMixer] instead, and near the end of
+ * each track a second player prerolls the staged next track and fades in over it; at the
+ * handoff that player becomes the session's player. See the crossfade section below.
  */
 @OptIn(UnstableApi::class)
 @AndroidEntryPoint
@@ -95,8 +114,6 @@ class PlaybackService : MediaSessionService() {
     @Inject lateinit var trackGainDao: tech.capullo.telecloudradio.data.db.TrackGainDao
 
     private var mediaSession: MediaSession? = null
-    private val balanceProcessor = BalanceAudioProcessor()
-    private val gainProcessor = GainAudioProcessor()
     private var gainJob: Job? = null
     private var fifoSink: FifoAudioBufferSink? = null
     private var releaseSpeakerJob: Job? = null
@@ -217,12 +234,53 @@ class PlaybackService : MediaSessionService() {
     }
     private val mainHandler = Handler(Looper.getMainLooper())
 
-    // The local playback player (ExoPlayer, wrapped by forwardingPlayer) and the listen-in stand-in
-    // player. Held as fields so the isListening collector can swap the MediaSession between them and
-    // onDestroy can release both. See the listen-in swap in onCreate for why the stand-in exists.
-    private var localPlayer: ExoPlayer? = null
+    // The local playback deck (ExoPlayer + its processors; its player wrapped by forwardingPlayer)
+    // and the listen-in stand-in player. Held as fields so the isListening collector can swap the
+    // MediaSession between them and onDestroy can release both. A crossfade handoff replaces the
+    // deck and forwardingPlayer with the ones that prerolled the next track. See the listen-in
+    // swap in onCreate for why the stand-in exists.
+    private var primary: Deck? = null
     private var forwardingPlayer: Player? = null
     private var remoteListenPlayer: RemoteListenPlayer? = null
+
+    /**
+     * One player and the per-player parts of its sink chain. Processors keep per-stream state, so
+     * two players can't share them: each crossfade builds a second deck for the incoming track.
+     * Both tees end in a [RoutableSink], because Media3 fixes a processor's destination at build
+     * time and a crossfade has to repoint them afterwards.
+     */
+    private class Deck(
+        val player: ExoPlayer,
+        val balance: BalanceAudioProcessor,
+        val gain: GainAudioProcessor,
+        val fifoRoute: RoutableSink,
+        val silenceRoute: RoutableSink,
+    ) {
+        /** This deck's way into the mixer while crossfade is on; null while its tee feeds the FIFO directly. */
+        var lane: CrossfadeMixer.Lane? = null
+    }
+
+    /** One crossfade into [target], from arming to handoff. [item] is the staged MediaItem itself. */
+    private class Crossfade(val target: TrackKey, val item: MediaItem) {
+        var deck: Deck? = null
+        var listener: Player.Listener? = null
+        var gainJob: Job? = null
+        var ready = false
+        var fadeMs = 0L
+        var fadeStartedElapsedMs = 0L // 0 = still prerolling
+    }
+
+    // --- Crossfade ---
+    // Nothing here exists until the setting is turned on. Then the primary deck's FIFO tee feeds
+    // its mixer lane; near the end of a track crossfadeTick arms a Crossfade on the item
+    // PlayerViewModel staged next (by chat + message id), prerolls it on a second deck, starts the
+    // fade, and once the mixer has handed the broadcast over, completeCrossfade promotes that deck.
+    private var mixer: CrossfadeMixer? = null
+    private var crossfade: Crossfade? = null
+
+    // A boundary whose crossfade failed (decode error, too little time left, never handed off): it
+    // keeps the gapless join until the primary moves on to another item.
+    private var crossfadeSkip: TrackKey? = null
 
     // Mirror for the snapcontrol plugin, which queries from an IO thread while
     // ExoPlayer only allows access from its application thread.
@@ -374,28 +432,117 @@ class PlaybackService : MediaSessionService() {
         return ChannelMixingMatrix(inputChannelCount, out, c)
     }
 
-    override fun onCreate() {
-        super.onCreate()
-
-        // FIFO + snapserver process wrapper must exist before the sink opens the pipe
-        val fifoPath = snapcastManager.prepareBroadcast()
-        // enableKeepAlive = false: this sink is fed in bursts (ChannelMixing/Sonic/balance processors
-        // + local-file decode paced by AudioTrack backpressure), so the silence keep-alive would
-        // trip during normal drain waits and overfeed the FIFO -> stutter. Feed from real PCM only.
-        val sink = FifoAudioBufferSink(fifoPath, enableKeepAlive = false).also {
-            fifoSink = it
-            it.open()
+    // Playback callbacks of whichever deck is primary; completeCrossfade moves it to the new one.
+    private val primaryListener = object : Player.Listener {
+        override fun onMediaItemTransition(mediaItem: MediaItem?, reason: Int) {
+            // The track under an armed crossfade changed - an explicit skip (setMediaItem), or the
+            // gapless advance beating a fade that didn't finish in time: its target is stale. A
+            // gapless advance after the audio handoff (the posted promotion running late) keeps
+            // it: taking the broadcast back would restart the incoming track from the top.
+            if (reason != Player.MEDIA_ITEM_TRANSITION_REASON_AUTO || !crossfadeHandedOff()) {
+                cancelCrossfade(promoteIfHandedOff = false)
+            }
+            crossfadeSkip = null
+            // Fresh track → restart the silence grace window and clear the per-item skip guard.
+            // Fires for the gapless addMediaItem advance as well as explicit setMediaItem jumps.
+            trackStartedElapsedMs = SystemClock.elapsedRealtime()
+            silenceSkipFiredForItem = false
+            // Apply its stored normalization gain: unity until the row exists (never analyzed,
+            // or analysis still running), then the stored value as soon as it is written, so a
+            // freshly downloaded track is corrected mid-play rather than only on its next play.
+            // The observer is replaced on every transition, so a late row can't touch the next item.
+            gainJob?.cancel()
+            val gain = primary?.gain ?: return
+            gain.gain = 1f
+            val key = mediaItem?.trackKey() ?: return
+            gainJob = serviceScope.launch {
+                trackGainDao.observe(key.chatId, key.messageId).collect { row ->
+                    gain.gain = row?.gainLinear ?: 1f
+                    Log.d(TAG, "normalization gain ${key.chatId}/${key.messageId} = ${gain.gain} (${row?.source ?: "none yet"})")
+                }
+            }
         }
 
-        // Taps the post-decode PCM to record when audible audio last flowed; the watchdog loop below
-        // uses it to catch a track that "plays" (clock advancing) but is inaudible - decoding to pure
-        // silence, or (corrupt FLAC-in-MP4 the decoder drops entirely) producing no PCM at all. Its
-        // own tee sits alongside the FIFO tee.
-        val silenceSink = SilenceWatchdogSink().also { this.silenceSink = it }
+        override fun onTimelineChanged(timeline: Timeline, reason: Int) {
+            // PlayerViewModel unstaged or replaced the next item (a queue edit, or the sleep timer
+            // waiting for this track to end): no crossfade into it may start or finish. Once the
+            // audio has handed off, listeners already hear the incoming track and the outgoing one
+            // must not come back; the pending completeCrossfade promotes it and PlayerViewModel
+            // syncs to it as to a gapless advance.
+            val xf = crossfade ?: return
+            val player = primary?.player ?: return
+            if (stagedNext(player)?.first != xf.target && !crossfadeHandedOff()) {
+                cancelCrossfade(promoteIfHandedOff = false)
+            }
+        }
 
-        // Sink chain: [mix → 2ch] → [resample → 48000] → [balance] → [gain] →
-        // [tee → silence watchdog] → [tee → FIFO]. Balance and gain sit before the tees so every
-        // listener (local snapclient, LAN clients, web players) hears the same adjusted audio.
+        override fun onPositionDiscontinuity(oldPosition: Player.PositionInfo, newPosition: Player.PositionInfo, reason: Int) {
+            if (reason == Player.DISCONTINUITY_REASON_SEEK || reason == Player.DISCONTINUITY_REASON_SEEK_ADJUSTMENT) {
+                cancelCrossfade(promoteIfHandedOff = false)
+            }
+        }
+
+        override fun onIsPlayingChanged(isPlaying: Boolean) {
+            playerIsPlaying = isPlaying
+            if (isPlaying) {
+                // Only NOW start feeding the FIFO: writing during preroll
+                // deadlocks - the 64KB pipe has no reader yet and a blocked
+                // tee stalls READY forever.
+                fifoSink?.enableWrites()
+                // Release whatever was held since the pause, faded in.
+                fifoSink?.resumeOutput()
+                snapcastManager.startBroadcast(snapNowPlaying, snapController)
+                // Playing again after the speaker was released from ENDED/IDLE: starting a new
+                // track there doesn't change playWhenReady, so no explicit-Play callback comes.
+                cancelSpeakerRelease()
+                snapcastManager.retakeReleasedSpeaker()
+            } else {
+                // ExoPlayer keeps draining a few hundred ms of PCM into the tee after a pause;
+                // reaching snapserver after it has gone idle, those bursts flip the stream back
+                // to playing and every speaker plays a fragment. Fade out and hold them instead.
+                fifoSink?.pauseOutput()
+                // Paused (or stalled) mid-crossfade: drop the incoming deck, the outgoing track ramps
+                // back up. If the audio has already handed off, the pending completeCrossfade promotes
+                // the incoming deck and carries this pause over to it.
+                if (!crossfadeHandedOff()) cancelCrossfade(promoteIfHandedOff = false)
+            }
+            publishNowPlaying()
+        }
+
+        override fun onPlayWhenReadyChanged(playWhenReady: Boolean, reason: Int) {
+            // Explicit Play only (a paused->playing change the user asked for, from any
+            // controller: app, notification, headset): reclaim audio focus so a co-broadcasting
+            // app's local snapclient is evicted and only this device is audible. Not tied to
+            // isPlaying, which also flips back to true after every buffering stall and would
+            // steal the speaker from whoever the user had since handed it to. Bringing the app
+            // to the foreground reclaims separately (MainActivity.onStart).
+            if (playWhenReady && reason == Player.PLAY_WHEN_READY_CHANGE_REASON_USER_REQUEST) {
+                snapcastManager.reclaimAudioFocus(fromPlay = true)
+            }
+            // Paused long enough: give the speaker back (focus + local snapclient) so a paused
+            // TC neither blocks nor later auto-resumes over another app. The broadcast stays up.
+            if (playWhenReady) cancelSpeakerRelease() else scheduleSpeakerRelease()
+        }
+
+        override fun onPlaybackStateChanged(playbackState: Int) {
+            // A finished playlist or a player error leaves playWhenReady = true, so the
+            // callback above never fires; the speaker would be held for silence forever.
+            if (playbackState == Player.STATE_ENDED || playbackState == Player.STATE_IDLE) {
+                scheduleSpeakerRelease()
+                cancelCrossfade(promoteIfHandedOff = false)
+            }
+        }
+    }
+
+    // One decode pipeline: [mix → 2ch] → [resample → 48000] → [balance] → [gain] →
+    // [tee → silence route] → [tee → FIFO route] → silent AudioTrack. Balance and gain sit before
+    // the tees so every listener (local snapclient, LAN clients, web players) hears the same
+    // adjusted audio. Builds the primary deck in onCreate and each crossfade's incoming deck.
+    private fun buildDeck(): Deck {
+        val balance = BalanceAudioProcessor().apply { this.balance = settings.balance.value }
+        val gain = GainAudioProcessor()
+        val fifoRoute = RoutableSink()
+        val silenceRoute = RoutableSink()
         val renderersFactory = object : DefaultRenderersFactory(this) {
             // Prefer platform decoders, but fall back to the bundled Media3 FFmpeg extension (on the
             // classpath via capullo-audio) for formats the platform can't handle - widens codec
@@ -472,18 +619,102 @@ class PlaybackService : MediaSessionService() {
                         DefaultAudioSink.DefaultAudioProcessorChain(
                             mixer,
                             resampler,
-                            balanceProcessor,
-                            gainProcessor,
-                            TeeAudioProcessor(silenceSink),
-                            TeeAudioProcessor(sink),
+                            balance,
+                            gain,
+                            TeeAudioProcessor(silenceRoute),
+                            TeeAudioProcessor(fifoRoute),
                         ),
                     )
                     .build()
             }
         }
-        balanceProcessor.balance = settings.balance.value
+        val player = ExoPlayer.Builder(this, renderersFactory)
+            .setAudioAttributes(
+                AudioAttributes.Builder()
+                    .setContentType(C.AUDIO_CONTENT_TYPE_MUSIC)
+                    .setUsage(C.USAGE_MEDIA)
+                    .build(),
+                // handleAudioFocus = FALSE: ExoPlayer here is a silent (volume 0)
+                // clock that feeds the FIFO - it must never react to focus. The
+                // audible endpoint is the local snapclient, which owns focus; when
+                // its Oboe stream grabs focus a few seconds in, a focus-handling
+                // ExoPlayer would see a "loss" and pause itself, stalling the tee →
+                // snapserver goes idle → snapclient runs out of chunks (silence).
+                /* handleAudioFocus = */
+                false,
+            )
+            // Becoming-noisy (headphone unplug) must not pause the broadcast either -
+            // other rooms/web players keep listening.
+            .setHandleAudioBecomingNoisy(false)
+            .build()
+        // Local audio comes from the snapclient; the tee sits pre-volume so the
+        // FIFO always receives full-scale PCM.
+        player.volume = 0f
+        return Deck(player, balance, gain, fifoRoute, silenceRoute)
+    }
+
+    // The playlist lives in PlayerViewModel. ExoPlayer itself only ever sees at most two items
+    // (current + one pre-enqueued "next", for gapless auto-advance - see
+    // PlayerViewModel.syncEnqueuedNext) and never a real multi-item queue, so native
+    // next/previous are still unusable for user-facing skip. Force the commands available and
+    // route them through ActiveTrackRepository instead, the same path the mini player uses -
+    // seekToNext()/seekToPrevious() are hard overrides, never falling through to Media3's
+    // native skip-into-queue, so this never collides with the pre-enqueued item.
+    private fun buildForwardingPlayer(player: Player): ForwardingPlayer = object : ForwardingPlayer(player) {
+        override fun getAvailableCommands(): Player.Commands = super.getAvailableCommands().buildUpon()
+            .add(Player.COMMAND_SEEK_TO_NEXT)
+            .add(Player.COMMAND_SEEK_TO_NEXT_MEDIA_ITEM)
+            .add(Player.COMMAND_SEEK_TO_PREVIOUS)
+            .add(Player.COMMAND_SEEK_TO_PREVIOUS_MEDIA_ITEM)
+            .build()
+
+        override fun isCommandAvailable(command: Int): Boolean = command == Player.COMMAND_SEEK_TO_NEXT ||
+            command == Player.COMMAND_SEEK_TO_NEXT_MEDIA_ITEM ||
+            command == Player.COMMAND_SEEK_TO_PREVIOUS ||
+            command == Player.COMMAND_SEEK_TO_PREVIOUS_MEDIA_ITEM ||
+            super.isCommandAvailable(command)
+
+        override fun seekToNext() {
+            activeTrackRepository.emitCommand(PlaybackCommand.NEXT)
+        }
+
+        override fun seekToNextMediaItem() {
+            activeTrackRepository.emitCommand(PlaybackCommand.NEXT)
+        }
+
+        override fun seekToPrevious() {
+            activeTrackRepository.emitCommand(PlaybackCommand.PREV)
+        }
+
+        override fun seekToPreviousMediaItem() {
+            activeTrackRepository.emitCommand(PlaybackCommand.PREV)
+        }
+    }
+
+    override fun onCreate() {
+        super.onCreate()
+
+        // FIFO + snapserver process wrapper must exist before the sink opens the pipe
+        val fifoPath = snapcastManager.prepareBroadcast()
+        // enableKeepAlive = false: this sink is fed in bursts (ChannelMixing/Sonic/balance processors
+        // + local-file decode paced by AudioTrack backpressure), so the silence keep-alive would
+        // trip during normal drain waits and overfeed the FIFO -> stutter. Feed from real PCM only.
+        val sink = FifoAudioBufferSink(fifoPath, enableKeepAlive = false).also {
+            fifoSink = it
+            it.open()
+        }
+
+        // Taps the post-decode PCM to record when audible audio last flowed; the watchdog loop below
+        // uses it to catch a track that "plays" (clock advancing) but is inaudible - decoding to pure
+        // silence, or (corrupt FLAC-in-MP4 the decoder drops entirely) producing no PCM at all. Its
+        // own tee sits alongside the FIFO tee.
+        val silenceSink = SilenceWatchdogSink().also { this.silenceSink = it }
+
         serviceScope.launch {
-            settings.balance.collect { balanceProcessor.balance = it }
+            settings.balance.collect {
+                primary?.balance?.balance = it
+                crossfade?.deck?.balance?.balance = it
+            }
         }
         serviceScope.launch {
             combine(settings.webDebugPanel, settings.webAutoplay) { debug, autoplay ->
@@ -539,140 +770,11 @@ class PlaybackService : MediaSessionService() {
                 seenFirstEmission = true
             }
         }
-        val player = ExoPlayer.Builder(this, renderersFactory)
-            .setAudioAttributes(
-                AudioAttributes.Builder()
-                    .setContentType(C.AUDIO_CONTENT_TYPE_MUSIC)
-                    .setUsage(C.USAGE_MEDIA)
-                    .build(),
-                // handleAudioFocus = FALSE: ExoPlayer here is a silent (volume 0)
-                // clock that feeds the FIFO - it must never react to focus. The
-                // audible endpoint is the local snapclient, which owns focus; when
-                // its Oboe stream grabs focus a few seconds in, a focus-handling
-                // ExoPlayer would see a "loss" and pause itself, stalling the tee →
-                // snapserver goes idle → snapclient runs out of chunks (silence).
-                /* handleAudioFocus = */
-                false,
-            )
-            // Becoming-noisy (headphone unplug) must not pause the broadcast either -
-            // other rooms/web players keep listening.
-            .setHandleAudioBecomingNoisy(false)
-            .build()
-        localPlayer = player
-        // Local audio comes from the snapclient; the tee sits pre-volume so the
-        // FIFO always receives full-scale PCM.
-        player.volume = 0f
-
-        player.addListener(object : Player.Listener {
-            override fun onMediaItemTransition(mediaItem: MediaItem?, reason: Int) {
-                // Fresh track → restart the silence grace window and clear the per-item skip guard.
-                // Fires for the gapless addMediaItem advance as well as explicit setMediaItem jumps.
-                trackStartedElapsedMs = SystemClock.elapsedRealtime()
-                silenceSkipFiredForItem = false
-                // Apply its stored normalization gain: unity until the row exists (never analyzed,
-                // or analysis still running), then the stored value as soon as it is written, so a
-                // freshly downloaded track is corrected mid-play rather than only on its next play.
-                // The observer is replaced on every transition, so a late row can't touch the next item.
-                gainJob?.cancel()
-                gainProcessor.gain = 1f
-                val messageId = mediaItem?.mediaId?.toLongOrNull()
-                val chatId = mediaItem?.mediaMetadata?.extras
-                    ?.takeIf { it.containsKey(EXTRA_CHAT_ID) }
-                    ?.getLong(EXTRA_CHAT_ID)
-                if (messageId != null && chatId != null) {
-                    gainJob = serviceScope.launch {
-                        trackGainDao.observe(chatId, messageId).collect { row ->
-                            gainProcessor.gain = row?.gainLinear ?: 1f
-                            Log.d(TAG, "normalization gain $chatId/$messageId = ${gainProcessor.gain} (${row?.source ?: "none yet"})")
-                        }
-                    }
-                }
-            }
-
-            override fun onIsPlayingChanged(isPlaying: Boolean) {
-                playerIsPlaying = isPlaying
-                if (isPlaying) {
-                    // Only NOW start feeding the FIFO: writing during preroll
-                    // deadlocks - the 64KB pipe has no reader yet and a blocked
-                    // tee stalls READY forever.
-                    fifoSink?.enableWrites()
-                    // Release whatever was held since the pause, faded in.
-                    fifoSink?.resumeOutput()
-                    snapcastManager.startBroadcast(snapNowPlaying, snapController)
-                    // Playing again after the speaker was released from ENDED/IDLE: starting a new
-                    // track there doesn't change playWhenReady, so no explicit-Play callback comes.
-                    cancelSpeakerRelease()
-                    snapcastManager.retakeReleasedSpeaker()
-                } else {
-                    // ExoPlayer keeps draining a few hundred ms of PCM into the tee after a pause;
-                    // reaching snapserver after it has gone idle, those bursts flip the stream back
-                    // to playing and every speaker plays a fragment. Fade out and hold them instead.
-                    fifoSink?.pauseOutput()
-                }
-                publishNowPlaying()
-            }
-
-            override fun onPlayWhenReadyChanged(playWhenReady: Boolean, reason: Int) {
-                // Explicit Play only (a paused->playing change the user asked for, from any
-                // controller: app, notification, headset): reclaim audio focus so a co-broadcasting
-                // app's local snapclient is evicted and only this device is audible. Not tied to
-                // isPlaying, which also flips back to true after every buffering stall and would
-                // steal the speaker from whoever the user had since handed it to. Bringing the app
-                // to the foreground reclaims separately (MainActivity.onStart).
-                if (playWhenReady && reason == Player.PLAY_WHEN_READY_CHANGE_REASON_USER_REQUEST) {
-                    snapcastManager.reclaimAudioFocus(fromPlay = true)
-                }
-                // Paused long enough: give the speaker back (focus + local snapclient) so a paused
-                // TC neither blocks nor later auto-resumes over another app. The broadcast stays up.
-                if (playWhenReady) cancelSpeakerRelease() else scheduleSpeakerRelease()
-            }
-
-            override fun onPlaybackStateChanged(playbackState: Int) {
-                // A finished playlist or a player error leaves playWhenReady = true, so the
-                // callback above never fires; the speaker would be held for silence forever.
-                if (playbackState == Player.STATE_ENDED || playbackState == Player.STATE_IDLE) scheduleSpeakerRelease()
-            }
-        })
-
-        // The playlist lives in PlayerViewModel. ExoPlayer itself only ever sees at most two items
-        // (current + one pre-enqueued "next", for gapless auto-advance - see
-        // PlayerViewModel.syncEnqueuedNext) and never a real multi-item queue, so native
-        // next/previous are still unusable for user-facing skip. Force the commands available and
-        // route them through ActiveTrackRepository instead, the same path the mini player uses -
-        // seekToNext()/seekToPrevious() are hard overrides, never falling through to Media3's
-        // native skip-into-queue, so this never collides with the pre-enqueued item.
-        val forwardingPlayer = object : ForwardingPlayer(player) {
-            override fun getAvailableCommands(): Player.Commands = super.getAvailableCommands().buildUpon()
-                .add(Player.COMMAND_SEEK_TO_NEXT)
-                .add(Player.COMMAND_SEEK_TO_NEXT_MEDIA_ITEM)
-                .add(Player.COMMAND_SEEK_TO_PREVIOUS)
-                .add(Player.COMMAND_SEEK_TO_PREVIOUS_MEDIA_ITEM)
-                .build()
-
-            override fun isCommandAvailable(command: Int): Boolean = command == Player.COMMAND_SEEK_TO_NEXT ||
-                command == Player.COMMAND_SEEK_TO_NEXT_MEDIA_ITEM ||
-                command == Player.COMMAND_SEEK_TO_PREVIOUS ||
-                command == Player.COMMAND_SEEK_TO_PREVIOUS_MEDIA_ITEM ||
-                super.isCommandAvailable(command)
-
-            override fun seekToNext() {
-                activeTrackRepository.emitCommand(PlaybackCommand.NEXT)
-            }
-
-            override fun seekToNextMediaItem() {
-                activeTrackRepository.emitCommand(PlaybackCommand.NEXT)
-            }
-
-            override fun seekToPrevious() {
-                activeTrackRepository.emitCommand(PlaybackCommand.PREV)
-            }
-
-            override fun seekToPreviousMediaItem() {
-                activeTrackRepository.emitCommand(PlaybackCommand.PREV)
-            }
-        }
-
-        this.forwardingPlayer = forwardingPlayer
+        val deck = buildDeck().also { primary = it }
+        deck.fifoRoute.attach(sink)
+        deck.silenceRoute.attach(silenceSink)
+        deck.player.addListener(primaryListener)
+        val sessionPlayer = buildForwardingPlayer(deck.player).also { forwardingPlayer = it }
 
         // Read-only stand-in player for listen-in mode - holds the foreground service; transport is
         // driven by the listen screen (SnapcastManager.sendStreamControl), not through this player.
@@ -685,7 +787,7 @@ class PlaybackService : MediaSessionService() {
             PendingIntent.FLAG_IMMUTABLE,
         )
 
-        mediaSession = MediaSession.Builder(this, forwardingPlayer)
+        mediaSession = MediaSession.Builder(this, sessionPlayer)
             .setSessionActivity(sessionActivity)
             .build()
 
@@ -706,6 +808,8 @@ class PlaybackService : MediaSessionService() {
             snapcastManager.state.map { it.isListening }.distinctUntilChanged().collect { listening ->
                 val session = mediaSession ?: return@collect
                 if (listening) {
+                    // The listen-in stack replaced the broadcast: finish or drop any crossfade first.
+                    cancelCrossfade(promoteIfHandedOff = true)
                     forwardingPlayer?.let { if (it.isCommandAvailable(Player.COMMAND_PLAY_PAUSE)) it.pause() }
                     remoteListenPlayer?.let { if (session.player !== it) session.setPlayer(it) }
                 } else {
@@ -731,12 +835,27 @@ class PlaybackService : MediaSessionService() {
         serviceScope.launch {
             while (isActive) {
                 delay(WATCHDOG_TICK_MS)
-                val p = localPlayer ?: continue
+                val p = primary?.player ?: continue
                 if (silenceSkipFiredForItem || !p.isPlaying) continue
                 val audibleRef = maxOf(silenceSink?.lastAudibleElapsedMs ?: 0L, trackStartedElapsedMs)
                 if (audibleRef > 0L && SystemClock.elapsedRealtime() - audibleRef > SILENT_SKIP_MS) {
                     silenceSkipFiredForItem = true
                     onUndecodableSilence()
+                }
+            }
+        }
+
+        // Crossfade. With the setting off nothing below runs: the tee feeds the FIFO directly and
+        // no second player is ever built. On, a tick watches the primary's position for the point
+        // to preroll and then fade into the staged next track.
+        serviceScope.launch {
+            combine(settings.crossfadeEnabled, settings.crossfadeSeconds) { enabled, seconds ->
+                if (enabled) seconds * 1000L else 0L
+            }.distinctUntilChanged().collectLatest { fadeMs ->
+                routeThroughMixer(fadeMs > 0L)
+                while (fadeMs > 0L) {
+                    crossfadeTick(fadeMs)
+                    delay(CROSSFADE_TICK_MS)
                 }
             }
         }
@@ -774,6 +893,215 @@ class PlaybackService : MediaSessionService() {
         releaseSpeakerJob = null
     }
 
+    // Points the primary deck's FIFO tee at the mixer (crossfade on) or straight at the FIFO sink
+    // (off: the single-player path, with no mixer in between).
+    private fun routeThroughMixer(enabled: Boolean) {
+        if (!enabled) cancelCrossfade(promoteIfHandedOff = true)
+        val deck = primary ?: return
+        val sink = fifoSink ?: return
+        if (enabled) {
+            if (deck.lane != null) return
+            val mixer = this.mixer ?: CrossfadeMixer(sink).also { this.mixer = it }
+            val lane = mixer.newLane()
+            mixer.setLead(lane)
+            deck.lane = lane
+            deck.fifoRoute.attach(lane)
+        } else {
+            if (deck.lane == null) return
+            deck.lane = null
+            deck.fifoRoute.attach(sink)
+            mixer?.setLead(null)
+        }
+    }
+
+    // The item PlayerViewModel staged right after the current one, with its track identity. Null
+    // when nothing is staged or it is the same track again (repeat-one keeps the gapless loop).
+    private fun stagedNext(player: Player): Pair<TrackKey, MediaItem>? {
+        val index = player.currentMediaItemIndex + 1
+        if (index >= player.mediaItemCount) return null
+        val item = player.getMediaItemAt(index)
+        val key = item.trackKey() ?: return null
+        if (key == player.currentMediaItem?.trackKey()) return null
+        return key to item
+    }
+
+    // Runs every CROSSFADE_TICK_MS while crossfade is on. The fade has to end FADE_TAIL_GUARD_MS
+    // before the reported end of the track: the outgoing player's tee runs ahead of its position
+    // clock by up to its AudioTrack buffer, and past the end of the track that tee carries the
+    // gapless-staged next item, which must never be mixed in as "outgoing".
+    private fun crossfadeTick(durationMs: Long) {
+        val player = primary?.player ?: return
+        val xf = crossfade
+        if (xf != null && xf.fadeStartedElapsedMs > 0L && !crossfadeHandedOff() &&
+            SystemClock.elapsedRealtime() - xf.fadeStartedElapsedMs > xf.fadeMs + CROSSFADE_HANDOFF_TIMEOUT_MS
+        ) {
+            // The outgoing tee stopped delivering mid-fade, so the mixer never reached the handoff.
+            Log.w(TAG, "crossfade into ${xf.target} never handed off; keeping the gapless join")
+            crossfadeSkip = xf.target
+            cancelCrossfade(promoteIfHandedOff = false)
+            return
+        }
+        if (!player.isPlaying) return
+        val duration = player.duration
+        if (duration == C.TIME_UNSET || duration <= 0L) return
+        val remaining = duration - player.currentPosition
+        if (xf == null) {
+            val (target, item) = stagedNext(player) ?: return
+            if (target == crossfadeSkip) return
+            if (remaining > durationMs + FADE_TAIL_GUARD_MS + PREROLL_LEAD_MS) return
+            if (remaining < FADE_TAIL_GUARD_MS + MIN_FADE_MS) return
+            armCrossfade(target, item)
+        } else if (xf.ready && xf.fadeStartedElapsedMs == 0L && remaining <= durationMs + FADE_TAIL_GUARD_MS) {
+            // Shortened if the incoming deck only became ready late.
+            val fadeMs = minOf(durationMs, remaining - FADE_TAIL_GUARD_MS)
+            if (fadeMs < MIN_FADE_MS) {
+                crossfadeSkip = xf.target
+                cancelCrossfade(promoteIfHandedOff = false)
+                return
+            }
+            startFade(xf, fadeMs)
+        }
+    }
+
+    private fun armCrossfade(target: TrackKey, item: MediaItem) {
+        val xf = Crossfade(target, item)
+        crossfade = xf
+        // The incoming deck's gain has to be right before it decodes anything: its PCM goes through
+        // its own gain processor straight into the capture ring, so prerolling at unity would fade
+        // in at the wrong level. Keeps observing afterwards, like the primary's lookup, and becomes
+        // the primary's observer at the handoff.
+        xf.gainJob = serviceScope.launch {
+            trackGainDao.observe(target.chatId, target.messageId).collect { row ->
+                val gain = row?.gainLinear ?: 1f
+                Log.d(TAG, "normalization gain ${target.chatId}/${target.messageId} = $gain (${row?.source ?: "none yet"}, crossfade)")
+                val deck = xf.deck
+                if (deck == null) startPreroll(xf, gain) else deck.gain.gain = gain
+            }
+        }
+    }
+
+    private fun startPreroll(xf: Crossfade, gain: Float) {
+        val mixer = mixer ?: return
+        if (crossfade !== xf) return
+        val deck = buildDeck()
+        deck.gain.gain = gain
+        val lane = mixer.newLane()
+        deck.lane = lane
+        // Capture from the first sample. The silence route stays detached until promotion: the
+        // watchdog belongs to the deck listeners currently hear.
+        mixer.prepareIncoming(lane)
+        deck.fifoRoute.attach(lane)
+        val listener = object : Player.Listener {
+            override fun onPlaybackStateChanged(playbackState: Int) {
+                if (playbackState == Player.STATE_READY) xf.ready = true
+            }
+
+            override fun onPlayerError(error: PlaybackException) {
+                Log.w(TAG, "crossfade target ${xf.target} failed: ${error.message}")
+                // Posted: cancelling releases this very player, which must not happen inside its
+                // own callback.
+                mainHandler.post {
+                    if (crossfade === xf) {
+                        crossfadeSkip = xf.target
+                        cancelCrossfade(promoteIfHandedOff = false)
+                    }
+                }
+            }
+        }
+        xf.deck = deck
+        xf.listener = listener
+        deck.player.addListener(listener)
+        // The staged MediaItem itself: same mediaId, uri and MediaMetadata (title, artist, artwork,
+        // station, chat id extra), so after promotion the session, notification and gain lookup
+        // all describe the right track.
+        deck.player.setMediaItem(xf.item)
+        // Decode up to READY but hold the clock until startFade. What it buffers meanwhile is
+        // already in the ring and is the first thing the fade mixes in.
+        deck.player.playWhenReady = false
+        deck.player.prepare()
+    }
+
+    private fun startFade(xf: Crossfade, fadeMs: Long) {
+        val mixer = mixer ?: return
+        val deck = xf.deck ?: return
+        val frames = fadeMs * CrossfadeMixer.SAMPLE_RATE_HZ / 1000
+        // Runs on the outgoing playback thread right after the last mixed buffer was written.
+        val onHandoff = Runnable { mainHandler.post { completeCrossfade(xf) } }
+        if (!mixer.beginFade(frames, onHandoff)) {
+            cancelCrossfade(promoteIfHandedOff = false)
+            return
+        }
+        xf.fadeMs = fadeMs
+        xf.fadeStartedElapsedMs = SystemClock.elapsedRealtime()
+        deck.player.play()
+        Log.d(TAG, "crossfading into ${xf.target.chatId}/${xf.target.messageId} over $fadeMs ms")
+    }
+
+    private fun crossfadeHandedOff(): Boolean = mixer?.isLead(crossfade?.deck?.lane) == true
+
+    /**
+     * Ends the crossfade in flight, if any. Before the audio handoff the incoming deck is dropped
+     * and the outgoing track ramps back to full level. After it (listeners already hear the
+     * incoming track, only the promotion is still pending), [promoteIfHandedOff] finishes the
+     * handoff now; otherwise the outgoing deck takes the broadcast back. Never call with
+     * [promoteIfHandedOff] from inside the outgoing player's own callbacks: promotion releases it.
+     */
+    private fun cancelCrossfade(promoteIfHandedOff: Boolean) {
+        val xf = crossfade ?: return
+        val mixer = mixer
+        val keep = primary?.lane
+        if (mixer != null && keep != null && !mixer.abortFade(keep)) {
+            if (promoteIfHandedOff) {
+                completeCrossfade(xf)
+                return
+            }
+            mixer.revertTo(keep)
+        }
+        crossfade = null
+        xf.gainJob?.cancel()
+        val deck = xf.deck ?: return
+        xf.listener?.let(deck.player::removeListener)
+        deck.fifoRoute.attach(null)
+        deck.silenceRoute.attach(null)
+        deck.player.release()
+    }
+
+    /**
+     * Makes the crossfade's deck the primary once the mixer has handed the broadcast to it: the
+     * playback listener, silence watchdog, gain observer and MediaSession move over and the
+     * outgoing deck is released. PlayerViewModel sees its staged item become current and syncs as
+     * for a gapless advance (see its onMediaItemTransition).
+     */
+    private fun completeCrossfade(xf: Crossfade) {
+        if (crossfade !== xf) return // cancelled or reverted since the handoff was posted
+        val incoming = xf.deck ?: return
+        val outgoing = primary ?: return
+        crossfade = null
+        // A pause that reached the outgoing player after the audio handoff carries over.
+        val playWhenReady = outgoing.player.playWhenReady
+        // The outgoing player goes quietly: releasing it must neither gate the FIFO nor schedule a
+        // speaker release, and nothing it still decodes may reach a sink.
+        outgoing.player.removeListener(primaryListener)
+        outgoing.fifoRoute.attach(null)
+        outgoing.silenceRoute.attach(null)
+        xf.listener?.let(incoming.player::removeListener)
+        incoming.silenceRoute.attach(silenceSink)
+        primary = incoming
+        gainJob?.cancel()
+        gainJob = xf.gainJob
+        trackStartedElapsedMs = SystemClock.elapsedRealtime()
+        silenceSkipFiredForItem = false
+        crossfadeSkip = null
+        incoming.player.addListener(primaryListener)
+        val sessionPlayer = buildForwardingPlayer(incoming.player)
+        forwardingPlayer = sessionPlayer
+        // While listening in, the stand-in keeps the session; the collector swaps this one in after.
+        mediaSession?.let { if (it.player !== remoteListenPlayer) it.setPlayer(sessionPlayer) }
+        outgoing.player.release()
+        if (!playWhenReady) incoming.player.pause()
+        Log.d(TAG, "crossfade handed off to ${xf.target.chatId}/${xf.target.messageId}")
+    }
+
     override fun onDestroy() {
         serviceScope.cancel()
         // Playback is genuinely over (service torn down) → drop the active-playback state so the
@@ -791,10 +1119,11 @@ class PlaybackService : MediaSessionService() {
         fifoSink = null
         mediaSession?.release()
         mediaSession = null
-        // Release both players explicitly: the session only holds whichever is currently swapped in,
-        // so releasing session.player alone would leak the other.
-        localPlayer?.release()
-        localPlayer = null
+        // Release every player explicitly: the session only holds whichever is currently swapped in,
+        // so releasing session.player alone would leak the others.
+        cancelCrossfade(promoteIfHandedOff = false)
+        primary?.player?.release()
+        primary = null
         remoteListenPlayer?.release()
         remoteListenPlayer = null
         forwardingPlayer = null
@@ -828,5 +1157,20 @@ class PlaybackService : MediaSessionService() {
 
         // How long playback stays paused before the local speaker is released.
         private const val RELEASE_SPEAKER_AFTER_PAUSE_MS = 30_000L
+
+        // Crossfade timing. A fade ends this long before the reported end of the track, which
+        // covers the outgoing tee running ahead of the position clock (≤ the 750 ms AudioTrack
+        // buffer) plus one tick of polling.
+        private const val FADE_TAIL_GUARD_MS = 1000L
+
+        // How long before the fade the incoming deck starts prerolling.
+        private const val PREROLL_LEAD_MS = 2000L
+
+        // A shorter fade isn't worth it (track too short, or the incoming deck ready too late).
+        private const val MIN_FADE_MS = 1000L
+        private const val CROSSFADE_TICK_MS = 100L
+
+        // Slack past the fade's own length before a fade that never handed off is abandoned.
+        private const val CROSSFADE_HANDOFF_TIMEOUT_MS = 3000L
     }
 }

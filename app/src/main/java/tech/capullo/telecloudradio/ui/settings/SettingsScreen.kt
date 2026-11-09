@@ -228,6 +228,12 @@ class SettingsViewModel @Inject constructor(
     val balance: StateFlow<Float> = settings.balance
     fun setBalance(value: Float) = settings.setBalance(value)
 
+    val crossfadeEnabled: StateFlow<Boolean> = settings.crossfadeEnabled
+    fun setCrossfadeEnabled(enabled: Boolean) = settings.setCrossfadeEnabled(enabled)
+
+    val crossfadeSeconds: StateFlow<Int> = settings.crossfadeSeconds
+    fun setCrossfadeSeconds(value: Int) = settings.setCrossfadeSeconds(value)
+
     val webDebugPanel: StateFlow<Boolean> = settings.webDebugPanel
     fun setWebDebugPanel(value: Boolean) = settings.setWebDebugPanel(value)
 
@@ -354,6 +360,42 @@ fun SettingsScreen(
                     viewModel.sleepTimerMinutes = it
                 },
             )
+
+            HorizontalDivider(modifier = Modifier.padding(vertical = 8.dp))
+
+            SectionHeader("Crossfade")
+            val crossfadeEnabled by viewModel.crossfadeEnabled.collectAsStateWithLifecycle()
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 16.dp, vertical = 8.dp),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = androidx.compose.ui.Alignment.CenterVertically,
+            ) {
+                Column(modifier = Modifier.weight(1f)) {
+                    Text("Crossfade between tracks", style = MaterialTheme.typography.bodyMedium)
+                    Text(
+                        "Fade each track out while the next one fades in. Off joins tracks " +
+                            "back to back with no gap.",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
+                Switch(checked = crossfadeEnabled, onCheckedChange = viewModel::setCrossfadeEnabled)
+            }
+            if (crossfadeEnabled) {
+                val crossfadeSeconds by viewModel.crossfadeSeconds.collectAsStateWithLifecycle()
+                IntStepperRow(
+                    title = "Crossfade length",
+                    info = "How long the two tracks overlap. The outgoing track fades out over " +
+                        "this long, finishing about a second before its end.",
+                    unit = "s",
+                    value = crossfadeSeconds,
+                    range = SettingsRepository.CROSSFADE_SECONDS_RANGE,
+                    step = 1,
+                    onValueChange = viewModel::setCrossfadeSeconds,
+                )
+            }
 
             HorizontalDivider(modifier = Modifier.padding(vertical = 8.dp))
 

@@ -48,6 +48,7 @@ import tech.capullo.telecloudradio.player.AudioMetadata
 import tech.capullo.telecloudradio.player.AudioMetadataReader
 import tech.capullo.telecloudradio.player.DownloadManager
 import tech.capullo.telecloudradio.player.PlaybackService
+import tech.capullo.telecloudradio.player.trackKey
 import tech.capullo.telecloudradio.util.PerfTrace
 import java.io.File
 import javax.inject.Inject
@@ -146,9 +147,9 @@ class PlayerViewModel @Inject constructor(
     // Last prefetch window handed to prefetchJob; used to skip pointless cancel/relaunch cycles.
     private var lastPrefetchWindow: List<Int>? = null
 
-    // Gapless advance: the messageId (if any) of the track currently staged as the controller's
-    // queued-but-not-yet-playing next MediaItem (addMediaItem, never setMediaItem - that would
-    // replace the whole queue). Media3 then transitions to it with no flush/preroll, so the FIFO
+    // Gapless advance: the identity (chat + message) of the track currently staged as the
+    // controller's queued-but-not-yet-playing next MediaItem (addMediaItem, never setMediaItem - that
+    // would replace the whole queue). Media3 then transitions to it with no flush/preroll, so the FIFO
     // never goes idle crossing a track boundary - unlike the old STATE_ENDED -> setMediaItem path,
     // which tore the sink down and rebuilt it, very likely tripping snapserver's 120ms dryout window
     // on every single track change. Kept to exactly ONE track ahead (not the whole playlist) because
@@ -157,9 +158,11 @@ class PlayerViewModel @Inject constructor(
     // a queue edit (playNext, remove, reorder) can put a different track at the same index, and an
     // index match would leave the old one staged. Explicit jumps (user taps a track, NEXT/PREV,
     // playAt) stay destructive via playTrack()/setMediaItem - only the natural end-of-track advance
-    // goes through this path (gated on Player.MEDIA_ITEM_TRANSITION_REASON_AUTO, which setMediaItem
-    // never produces).
-    private var stagedNextId: Long? = null
+    // goes through this path: Player.MEDIA_ITEM_TRANSITION_REASON_AUTO for the gapless join, or the
+    // staged item becoming current on PlaybackService's crossfade player (setMediaItem never
+    // produces either, and clears this first). The staged item is also what a crossfade fades into,
+    // so unstaging it (queue edit, sleep timer) is what cancels one.
+    private var stagedNext: TrackKey? = null
     private var enqueueJob: Job? = null
 
     // Set when the countdown hit zero mid-track: playback finishes the current
@@ -190,7 +193,19 @@ class PlayerViewModel @Inject constructor(
                     if (state == Player.STATE_ENDED) onTrackEnded()
                 }
                 override fun onMediaItemTransition(mediaItem: MediaItem?, reason: Int) {
-                    if (reason == Player.MEDIA_ITEM_TRANSITION_REASON_AUTO) onGaplessAdvance()
+                    if (reason == Player.MEDIA_ITEM_TRANSITION_REASON_AUTO) {
+                        onGaplessAdvance()
+                    } else if (reason != Player.MEDIA_ITEM_TRANSITION_REASON_PLAYLIST_CHANGED) {
+                        // A crossfade handoff swaps the session's player. The swap has no reason
+                        // of its own, so Media3 reports PlayerInfo's default (REPEAT). A track
+                        // other than the one this VM is on becoming current without a setMediaItem
+                        // (PLAYLIST_CHANGED) is that handoff. Matched against the current track
+                        // rather than stagedNext, which a queue edit or the sleep timer landing
+                        // just before the swap may already have cleared.
+                        val key = mediaItem?.trackKey() ?: return
+                        val current = playlist.getOrNull(currentIndex) ?: _uiState.value.track
+                        if (current == null || key != TrackKey(current.chatId, current.messageId)) onGaplessAdvance()
+                    }
                 }
                 override fun onIsPlayingChanged(isPlaying: Boolean) {
                     if (isPlaying && !controllerPreparedForCurrentChat) {
@@ -735,8 +750,11 @@ class PlayerViewModel @Inject constructor(
                 _sleepTimerSecondsRemaining.value = remaining
             }
             // Countdown done - let the current track play out, then pause. That pause only runs from
-            // onTrackEnded (STATE_ENDED), which a gapless advance never reaches, so unstage the next
-            // track; syncEnqueuedNext won't restage it while sleepAtTrackEnd is set.
+            // onTrackEnded (STATE_ENDED), which a gapless advance or a crossfade never reaches, so
+            // unstage the next track; syncEnqueuedNext won't restage it while sleepAtTrackEnd is set.
+            // PlaybackService cancels a crossfade whose target is unstaged, so none starts either,
+            // and one already fading ramps back out. One whose audio already handed off completes:
+            // the new track then plays out instead, and stageTargetIndex keeps the next unstaged.
             if (controller?.isPlaying == true) {
                 sleepAtTrackEnd = true
                 syncEnqueuedNext()
@@ -811,7 +829,7 @@ class PlayerViewModel @Inject constructor(
     }
 
     // Keeps exactly one track staged right after the controller's current item (addMediaItem) for
-    // gapless auto-advance - see stagedNextId's doc. Called after every playlist mutation
+    // gapless auto-advance - see stagedNext's doc. Called after every playlist mutation
     // (publishQueue), after playTrack lands a new current track, after prefetchAhead's download of
     // the next file completes (the file may not have existed yet on the first call), after a
     // gapless transition fires (to stage the one after that), and when the repeat mode or the sleep
@@ -819,8 +837,8 @@ class PlayerViewModel @Inject constructor(
     // the one staged.
     private fun syncEnqueuedNext() {
         val target = stageTargetIndex()
-        val targetId = target?.let { playlist[it].messageId }
-        if (targetId != null && targetId == stagedNextId) return
+        val targetKey = target?.let { TrackKey(playlist[it].chatId, playlist[it].messageId) }
+        if (targetKey != null && targetKey == stagedNext) return
         enqueueJob?.cancel()
         unstageNext()
         if (target == null) return
@@ -854,7 +872,7 @@ class PlayerViewModel @Inject constructor(
                     .setMediaMetadata(mediaMetadata)
                     .build(),
             )
-            stagedNextId = track.messageId
+            stagedNext = TrackKey(track.chatId, track.messageId)
         }
     }
 
@@ -866,21 +884,22 @@ class PlayerViewModel @Inject constructor(
             val firstAfter = it.currentMediaItemIndex + 1
             if (it.mediaItemCount > firstAfter) it.removeMediaItems(firstAfter, it.mediaItemCount)
         }
-        stagedNextId = null
+        stagedNext = null
     }
 
     // Fires when ExoPlayer itself auto-advances into the staged next item (gapless - no flush, no
-    // preroll, the FIFO never idles crossing the boundary). Mirrors playTrack's "truthful swap"
-    // tail: the track is now actually audible, so every user-visible field updates for real. Does
-    // not call setMediaItem/prepare/play - ExoPlayer is already playing it. The finished item is
-    // still queued before the new current one, so it is removed first: removing items BEFORE
-    // currentMediaItemIndex never interrupts playback, and it restores the [current] (+ staged
-    // next) shape syncEnqueuedNext works on.
+    // preroll, the FIFO never idles crossing the boundary), and when a crossfade into it hands off.
+    // Mirrors playTrack's "truthful swap" tail: the track is now actually audible, so every
+    // user-visible field updates for real. Does not call setMediaItem/prepare/play - ExoPlayer is
+    // already playing it. After a gapless join the finished item is still queued before the new
+    // current one, so it is removed first: removing items BEFORE currentMediaItemIndex never
+    // interrupts playback, and it restores the [current] (+ staged next) shape syncEnqueuedNext
+    // works on. A crossfade's new player holds only the new item, so there is nothing to remove.
     private fun onGaplessAdvance() {
         val ctrl = controller ?: return
         val playingIndex = ctrl.currentMediaItemIndex
         if (playingIndex > 0) ctrl.removeMediaItems(0, playingIndex)
-        stagedNextId = null
+        stagedNext = null
         if (playlist.isEmpty() || !controllerPreparedForCurrentChat) return
         // Resolve what is actually playing from the controller, not from what was staged. The
         // queue allows duplicates: prefer the slot the advance was expected to land on.
@@ -1264,7 +1283,7 @@ class PlayerViewModel @Inject constructor(
             .build()
         // setMediaItem replaces the whole controller queue (including any item staged by a
         // previous syncEnqueuedNext) with just this one - drop the stale tracking var to match.
-        stagedNextId = null
+        stagedNext = null
         enqueueJob?.cancel()
         controller?.apply {
             setMediaItem(
