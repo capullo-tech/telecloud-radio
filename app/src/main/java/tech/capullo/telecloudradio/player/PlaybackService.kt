@@ -581,7 +581,10 @@ class PlaybackService : MediaSessionService() {
                     ?.getLong(EXTRA_CHAT_ID)
                 if (messageId != null && chatId != null) {
                     gainJob = serviceScope.launch {
-                        trackGainDao.observe(chatId, messageId).collect { row -> gainProcessor.gain = row?.gainLinear ?: 1f }
+                        trackGainDao.observe(chatId, messageId).collect { row ->
+                            gainProcessor.gain = row?.gainLinear ?: 1f
+                            Log.d(TAG, "normalization gain $chatId/$messageId = ${gainProcessor.gain} (${row?.source ?: "none yet"})")
+                        }
                     }
                 }
             }
