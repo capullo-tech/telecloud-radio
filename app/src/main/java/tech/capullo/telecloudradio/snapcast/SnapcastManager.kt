@@ -201,7 +201,7 @@ class SnapcastManager @Inject constructor(
      */
     fun prepareBroadcast(): String {
         stopBroadcast()
-        // OS-assigned ports so multiple capullo apps coexist and the ports aren't a fixed guess.
+        // A random consecutive port block so multiple capullo apps coexist and the ports aren't a fixed guess.
         // The resolved trio is read back off snapserver.ports to wire the snapclient / NSD / control.
         return SnapserverProcess(
             context,
