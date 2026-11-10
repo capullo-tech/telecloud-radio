@@ -96,6 +96,7 @@ class TelegramRepository @Inject constructor(
     fun setupParameters() = client.setupParameters()
     suspend fun setPhoneNumber(phone: String) = client.setPhoneNumber(phone)
     suspend fun checkCode(code: String) = client.checkCode(code)
+    suspend fun resendCode() = client.resendCode()
     suspend fun checkPassword(password: String) = client.checkPassword(password)
 
     // No cap: the list used to be truncated by a user-facing "Stations" limit (default 20,

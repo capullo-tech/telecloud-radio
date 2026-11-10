@@ -1,0 +1,36 @@
+
+    <div class="card">
+      <h2>Credentials</h2>
+      <p class="sub">Create your own Telegram client, connected to the same cloud as the official apps. To get started, create an app here and copy its <b>api_id</b> and <b>api_hash</b>.</p>
+      <div class="warn-rows creds-note">
+        <div class="warn-row">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="M12 11v5M12 7.5v.01"/></svg>
+          <div class="t"><b>Keep your api_hash private</b>Anyone who has it can use your app’s quota. One api_id per account.</div>
+        </div>
+        <div class="warn-row">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 5.5A1.5 1.5 0 0 1 5.5 4H10a2 2 0 0 1 2 2v14a1.5 1.5 0 0 0-1.5-1.5h-5A1.5 1.5 0 0 1 4 17Z"/><path d="M20 5.5A1.5 1.5 0 0 0 18.5 4H14a2 2 0 0 0-2 2v14a1.5 1.5 0 0 1 1.5-1.5h5A1.5 1.5 0 0 0 20 17Z"/></svg>
+          <div class="t"><b>What are api_id and api_hash?</b>How they work and how to use them in your app.</div>
+          <a class="link go" href="https://core.telegram.org/api/obtaining_api_id" target="_blank" rel="noopener">Learn more →</a>
+        </div>
+      </div>
+      <div class="creds">
+        <div class="cred">
+          <div class="k">App api_id</div>
+          <div class="v"><span class="vv">1234567</span>
+            <span class="icon-btns"><button type="button" class="icon-btn" title="Copy" data-copy="1234567"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="8" y="8" width="12" height="12" rx="2.5"/><path d="M16 8V6a2 2 0 0 0-2-2H6a2 2 0 0 0-2 2v8a2 2 0 0 0 2 2h2"/></svg></button></span>
+          </div>
+        </div>
+        <div class="cred">
+          <div class="k">App api_hash <span class="badge grey">secret</span></div>
+          <div class="v masked spoiler" id="api_hash_value" data-value="0123456789abcdef0123456789abcdef"><span class="vv">••••••••••••••••••••••••••••••••</span>
+            <span class="icon-btns">
+              <button type="button" class="icon-btn" title="Show" data-reveal="#api_hash_value"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><defs><mask id="eye-cut" maskUnits="userSpaceOnUse" x="0" y="0" width="24" height="24"><rect width="24" height="24" fill="#fff" stroke="none"/><path class="eye-gap" pathLength="1" d="M4 4l16 16" stroke="#000" stroke-width="5"/></mask></defs><g mask="url(#eye-cut)"><path d="M2.5 12S6 5.5 12 5.5 21.5 12 21.5 12 18 18.5 12 18.5 2.5 12 2.5 12Z"/><circle cx="12" cy="12" r="3"/></g><path class="eye-slash" pathLength="1" d="M4 4l16 16"/></svg></button>
+              <button type="button" class="icon-btn" title="Copy" data-copy="0123456789abcdef0123456789abcdef"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="8" y="8" width="12" height="12" rx="2.5"/><path d="M16 8V6a2 2 0 0 0-2-2H6a2 2 0 0 0-2 2v8a2 2 0 0 0 2 2h2"/></svg></button>
+            </span>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <form class="card" id="app_edit_form">
+      <input type="hidden" name="hash" value="formhash0000"/>
