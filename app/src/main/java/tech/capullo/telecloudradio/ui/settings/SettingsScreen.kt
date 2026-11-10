@@ -388,7 +388,7 @@ fun SettingsScreen(
                 IntStepperRow(
                     title = "Crossfade length",
                     info = "How long the two tracks overlap. The outgoing track fades out over " +
-                        "this long, finishing about a second before its end.",
+                        "this long, reaching silence a fraction of a second before its own end.",
                     unit = "s",
                     value = crossfadeSeconds,
                     range = SettingsRepository.CROSSFADE_SECONDS_RANGE,

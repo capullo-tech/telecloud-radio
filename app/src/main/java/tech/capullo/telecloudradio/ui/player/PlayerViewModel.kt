@@ -158,12 +158,18 @@ class PlayerViewModel @Inject constructor(
     // a queue edit (playNext, remove, reorder) can put a different track at the same index, and an
     // index match would leave the old one staged. Explicit jumps (user taps a track, NEXT/PREV,
     // playAt) stay destructive via playTrack()/setMediaItem - only the natural end-of-track advance
-    // goes through this path: Player.MEDIA_ITEM_TRANSITION_REASON_AUTO for the gapless join, or the
-    // staged item becoming current on PlaybackService's crossfade player (setMediaItem never
-    // produces either, and clears this first). The staged item is also what a crossfade fades into,
-    // so unstaging it (queue edit, sleep timer) is what cancels one.
+    // goes through this path: Player.MEDIA_ITEM_TRANSITION_REASON_AUTO for the gapless join, or
+    // PlaybackService's crossfade handing off to the staged item (see pendingHandoff; setMediaItem
+    // produces neither, and clears this first). The staged item is also what a crossfade fades
+    // into, so unstaging it (queue edit, sleep timer) is what cancels one.
     private var stagedNext: TrackKey? = null
     private var enqueueJob: Job? = null
+
+    // A crossfade that handed off to this track (ActiveTrackRepository.crossfadeHandoffs, an
+    // explicit signal from PlaybackService: the session's player swap that comes with it carries no
+    // transition reason of its own). The signal and the swap reach this VM separately and in no
+    // fixed order, so it syncs once the controller shows the track as current (syncCrossfadeHandoff).
+    private var pendingHandoff: TrackKey? = null
 
     // Set when the countdown hit zero mid-track: playback finishes the current
     // track, then onTrackEnded pauses instead of advancing.
@@ -193,19 +199,11 @@ class PlayerViewModel @Inject constructor(
                     if (state == Player.STATE_ENDED) onTrackEnded()
                 }
                 override fun onMediaItemTransition(mediaItem: MediaItem?, reason: Int) {
-                    if (reason == Player.MEDIA_ITEM_TRANSITION_REASON_AUTO) {
-                        onGaplessAdvance()
-                    } else if (reason != Player.MEDIA_ITEM_TRANSITION_REASON_PLAYLIST_CHANGED) {
-                        // A crossfade handoff swaps the session's player. The swap has no reason
-                        // of its own, so Media3 reports PlayerInfo's default (REPEAT). A track
-                        // other than the one this VM is on becoming current without a setMediaItem
-                        // (PLAYLIST_CHANGED) is that handoff. Matched against the current track
-                        // rather than stagedNext, which a queue edit or the sleep timer landing
-                        // just before the swap may already have cleared.
-                        val key = mediaItem?.trackKey() ?: return
-                        val current = playlist.getOrNull(currentIndex) ?: _uiState.value.track
-                        if (current == null || key != TrackKey(current.chatId, current.messageId)) onGaplessAdvance()
-                    }
+                    if (reason == Player.MEDIA_ITEM_TRANSITION_REASON_AUTO) onGaplessAdvance()
+                }
+                override fun onEvents(player: Player, events: Player.Events) {
+                    // Whichever event the session's player swap shows up as.
+                    syncCrossfadeHandoff()
                 }
                 override fun onIsPlayingChanged(isPlaying: Boolean) {
                     if (isPlaying && !controllerPreparedForCurrentChat) {
@@ -224,6 +222,12 @@ class PlayerViewModel @Inject constructor(
                     PlaybackCommand.NEXT -> nextTrack()
                     PlaybackCommand.PREV -> prevTrack()
                 }
+            }
+        }
+        viewModelScope.launch {
+            activeTrackRepository.crossfadeHandoffs.collect { target ->
+                pendingHandoff = target
+                syncCrossfadeHandoff()
             }
         }
         viewModelScope.launch {
@@ -887,6 +891,20 @@ class PlayerViewModel @Inject constructor(
         stagedNext = null
     }
 
+    // Applies a crossfade handoff (pendingHandoff) once the controller shows its track as current;
+    // until then the session's player swap hasn't reached the controller yet. Nothing to do if this
+    // VM is already on that track (an advance or a jump got there first).
+    private fun syncCrossfadeHandoff() {
+        val target = pendingHandoff ?: return
+        if (controller?.currentMediaItem?.trackKey() != target) return
+        val current = playlist.getOrNull(currentIndex)
+        if (current != null && TrackKey(current.chatId, current.messageId) == target) {
+            pendingHandoff = null
+            return
+        }
+        onGaplessAdvance()
+    }
+
     // Fires when ExoPlayer itself auto-advances into the staged next item (gapless - no flush, no
     // preroll, the FIFO never idles crossing the boundary), and when a crossfade into it hands off.
     // Mirrors playTrack's "truthful swap" tail: the track is now actually audible, so every
@@ -900,6 +918,7 @@ class PlayerViewModel @Inject constructor(
         val playingIndex = ctrl.currentMediaItemIndex
         if (playingIndex > 0) ctrl.removeMediaItems(0, playingIndex)
         stagedNext = null
+        pendingHandoff = null
         if (playlist.isEmpty() || !controllerPreparedForCurrentChat) return
         // Resolve what is actually playing from the controller, not from what was staged. The
         // queue allows duplicates: prefer the slot the advance was expected to land on.
@@ -1283,8 +1302,10 @@ class PlayerViewModel @Inject constructor(
             .setExtras(Bundle().apply { putLong(PlaybackService.EXTRA_CHAT_ID, track.chatId) })
             .build()
         // setMediaItem replaces the whole controller queue (including any item staged by a
-        // previous syncEnqueuedNext) with just this one - drop the stale tracking var to match.
+        // previous syncEnqueuedNext) with just this one - drop the stale tracking vars to match. A
+        // crossfade handoff still waiting for the controller is superseded by this jump too.
         stagedNext = null
+        pendingHandoff = null
         enqueueJob?.cancel()
         controller?.apply {
             setMediaItem(

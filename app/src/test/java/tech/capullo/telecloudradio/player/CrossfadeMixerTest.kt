@@ -1,26 +1,29 @@
 package tech.capullo.telecloudradio.player
 
 import androidx.media3.common.C
+import androidx.media3.common.audio.AudioProcessor
 import androidx.media3.exoplayer.audio.TeeAudioProcessor
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertThrows
 import org.junit.Assert.assertTrue
 import org.junit.Test
 import java.nio.ByteBuffer
 import java.nio.ByteOrder
 import kotlin.math.PI
 import kotlin.math.cos
+import kotlin.math.sin
 import kotlin.math.sqrt
 
 /**
  * [CrossfadeMixer] driven by sample count the way the two players' tees drive it, and
- * [RoutableSink]'s flush replay. Left and right carry different streams where that lets one run
- * check both gains at once.
+ * [RoutableTee]'s routing. Left and right carry different streams where that lets one run check
+ * both gains at once.
  */
 class CrossfadeMixerTest {
 
     /** Records the PCM written to it, consuming each buffer like the FIFO sink does. */
-    private class RecordingSink : TeeAudioProcessor.AudioBufferSink {
+    private open class RecordingSink : TeeAudioProcessor.AudioBufferSink {
         val left = mutableListOf<Int>()
         val right = mutableListOf<Int>()
         val events = mutableListOf<String>()
@@ -39,6 +42,19 @@ class CrossfadeMixerTest {
             buffer.position(buffer.limit())
         }
     }
+
+    private class StreamEndRecordingSink :
+        RecordingSink(),
+        StreamEndSink {
+        override fun endOfStream(sampleRateHz: Int, channelCount: Int, encoding: Int) {
+            events += "end $sampleRateHz/$channelCount/$encoding"
+        }
+    }
+
+    // The mixer's tail writer runs, or is stepped, by the test itself.
+    private val tailTasks = mutableListOf<Runnable>()
+
+    private fun newMixer(out: RecordingSink) = CrossfadeMixer(out, tailExecutor = { tailTasks += it })
 
     // A read-only stereo buffer, as TeeAudioProcessor hands it to its sink.
     private fun pcm(frames: IntRange, left: (Int) -> Int, right: (Int) -> Int): ByteBuffer {
@@ -63,6 +79,15 @@ class CrossfadeMixerTest {
 
     private val ramp = { f: Int -> f % 30_000 }
 
+    // The incoming stream from frame 1000 on, as it should reach the output after a handoff.
+    private fun assertIncomingContinues(out: RecordingSink, until: Int) {
+        assertEquals(until, out.left.size)
+        for (j in 1000 until until) {
+            assertEquals("left $j", ramp(j), out.left[j])
+            assertEquals("right $j", -ramp(j), out.right[j])
+        }
+    }
+
     private data class Handoff(val out: RecordingSink, val mixer: CrossfadeMixer, val outgoing: CrossfadeMixer.Lane, val incoming: CrossfadeMixer.Lane)
 
     // The incoming lane prerolls frames 0-2999 (ramp left, -ramp right), more than the fade will
@@ -70,7 +95,7 @@ class CrossfadeMixerTest {
     // buffer: 1536 frames out, the last 536 the incoming's alone, 1464 prerolled frames left over.
     private fun handOffWithBacklog(): Handoff {
         val out = RecordingSink()
-        val mixer = CrossfadeMixer(out)
+        val mixer = newMixer(out)
         val outgoing = mixer.newLane().also(mixer::setLead)
         val incoming = mixer.newLane().also(mixer::prepareIncoming)
         feed(incoming, 0, 3000, 700, ramp) { -ramp(it) }
@@ -84,7 +109,7 @@ class CrossfadeMixerTest {
     @Test
     fun `fade is equal power from full outgoing to full incoming`() {
         val out = RecordingSink()
-        val mixer = CrossfadeMixer(out)
+        val mixer = newMixer(out)
         val outgoing = mixer.newLane().also(mixer::setLead)
         val incoming = mixer.newLane().also(mixer::prepareIncoming)
         val window = 4800
@@ -110,6 +135,36 @@ class CrossfadeMixerTest {
     }
 
     @Test
+    fun `a loud correlated fade bends below full scale instead of clipping, a quieter one stays equal power`() {
+        // The same signal on both tracks, the worst case: cos + sin peaks at √2 mid-fade.
+        val window = 4800
+        fun fadeOf(level: Int): RecordingSink {
+            val out = RecordingSink()
+            val mixer = newMixer(out)
+            val outgoing = mixer.newLane().also(mixer::setLead)
+            val incoming = mixer.newLane().also(mixer::prepareIncoming)
+            feed(incoming, 0, window, 960, { level }, { -level })
+            assertTrue(mixer.beginFade(window.toLong(), Runnable {}))
+            feed(outgoing, 0, window, 480, { level }, { -level })
+            return out
+        }
+
+        val loud = fadeOf(30_000) // sums to 42 426 mid-fade
+        val peak = loud.left.max()
+        assertTrue("peak $peak: close to full scale, never held at it", peak in 32_000 until Short.MAX_VALUE.toInt())
+        // Rises to the middle of the window and falls after it, like the sum it bends.
+        for (j in 1..window / 2) assertTrue("rises at $j", loud.left[j] >= loud.left[j - 1])
+        for (j in window / 2 + 1 until window) assertTrue("falls at $j", loud.left[j] <= loud.left[j - 1])
+        for (j in 0 until window) assertEquals("frame $j", -loud.left[j].toDouble(), loud.right[j].toDouble(), 1.0)
+
+        val quiet = fadeOf(10_000) // peaks at 14 142, below the knee
+        for (j in 0 until window) {
+            val angle = j.toDouble() / window * PI / 2
+            assertEquals("frame $j", 10_000 * (cos(angle) + sin(angle)), quiet.left[j].toDouble(), 1.0)
+        }
+    }
+
+    @Test
     fun `after the window the incoming stream continues sample for sample, one buffer out per buffer in`() {
         val (out, mixer, outgoing, incoming) = handOffWithBacklog()
         assertFalse("the handoff already happened", mixer.abortFade(outgoing))
@@ -124,31 +179,68 @@ class CrossfadeMixerTest {
 
         assertEquals(listOf("buffer 250", "buffer 250"), out.events.drop(eventsAtHandoff))
         assertEquals(MARKER, out.left[0])
-        for (j in 1000 until out.left.size) {
-            assertEquals("left $j", ramp(j), out.left[j])
-            assertEquals("right $j", -ramp(j), out.right[j])
-        }
+        assertIncomingContinues(out, until = 2036)
     }
 
     @Test
-    fun `a flush of the lead writes what it still delays first, then passes buffers straight through`() {
-        val (out, _, _, incoming) = handOffWithBacklog()
-        feed(incoming, 3000, 500, 250, ramp) { -ramp(it) }
+    fun `a flush of the lead drops what it still delays, then passes buffers straight through`() {
+        val (out, mixer, _, lead) = handOffWithBacklog()
+        feed(lead, 3000, 500, 250, ramp) { -ramp(it) }
+        assertFalse("the backlog still delays the lane", mixer.isDrained(lead))
 
-        incoming.flush(48_000, 2, C.ENCODING_PCM_16BIT)
+        lead.flush(48_000, 2, PCM_16BIT) // a seek, skip or stop
 
-        // The end of the item: everything decoded before the flush airs, in order, ahead of it.
+        // What it delayed belongs to the position the player left: it never airs.
         assertEquals("flush 48000/2/2", out.events.last())
-        assertEquals(3500, out.left.size)
-        for (j in 1000 until 3500) {
-            assertEquals("left $j", ramp(j), out.left[j])
-            assertEquals("right $j", -ramp(j), out.right[j])
-        }
-        // Nothing left to delay: the next item's buffers go out as they come.
-        feed(incoming, 0, 300, 300, { 7 }, { -7 })
+        assertIncomingContinues(out, until = 2036)
+        assertTrue(mixer.isDrained(lead))
+        assertTrue(tailTasks.isEmpty())
+        feed(lead, 0, 300, 300, { 7 }, { -7 })
         assertEquals("buffer 300", out.events.last())
-        assertEquals(3800, out.left.size)
+        assertEquals(2336, out.left.size)
         assertEquals(7, out.left.last())
+    }
+
+    @Test
+    fun `an end of stream keeps the delay, the tail writer fills a gap, and the next item carries the rest on`() {
+        val (out, mixer, _, lead) = handOffWithBacklog()
+        feed(lead, 3000, 500, 250, ramp) { -ramp(it) }
+        val atEnd = out.events.size
+
+        // DefaultAudioSink at an item boundary: drain (end of stream), re-flush, next item. Here
+        // the next item is slow to come, and one tail chunk airs meanwhile.
+        lead.endOfStream(48_000, 2, PCM_16BIT)
+        assertEquals(1, tailTasks.size)
+        assertTrue(mixer.writeTailChunk())
+        lead.flush(48_000, 2, PCM_16BIT)
+        feed(lead, 3500, 500, 250, ramp) { -ramp(it) }
+
+        val chunk = CrossfadeMixer.TAIL_CHUNK_FRAMES
+        assertEquals(listOf("flush 48000/2/2", "buffer $chunk", "flush 48000/2/2", "buffer 250", "buffer 250"), out.events.drop(atEnd))
+        assertIncomingContinues(out, until = 2036 + chunk + 500)
+        // The stream went on, so the tail writer stops, and what is left stays a delay.
+        assertFalse(mixer.writeTailChunk())
+        assertEquals((1464L - chunk) * 1000 / 48_000, mixer.leadDelayMs())
+    }
+
+    @Test
+    fun `with nothing after an end of stream, the tail writer airs the delay at real-time pace`() {
+        val (out, mixer, _, lead) = handOffWithBacklog()
+        feed(lead, 3000, 500, 250, ramp) { -ramp(it) }
+        lead.endOfStream(48_000, 2, PCM_16BIT)
+        val atEnd = out.events.size
+
+        val started = System.nanoTime()
+        tailTasks.single().run()
+        val elapsedMs = (System.nanoTime() - started) / 1_000_000
+
+        // 1464 delayed frames: three full 10 ms chunks and the rest, chunk n no earlier than n
+        // chunk lengths in.
+        val chunk = CrossfadeMixer.TAIL_CHUNK_FRAMES
+        assertEquals(listOf("buffer $chunk", "buffer $chunk", "buffer $chunk", "buffer ${1464 - 3 * chunk}"), out.events.drop(atEnd))
+        assertTrue("took $elapsedMs ms", elapsedMs >= 4L * chunk * 1000 / 48_000)
+        assertIncomingContinues(out, until = 3500)
+        assertTrue(mixer.isDrained(lead))
     }
 
     @Test
@@ -178,9 +270,35 @@ class CrossfadeMixerTest {
     }
 
     @Test
-    fun `aborting mid-fade ramps back instead of jumping`() {
+    fun `once the outgoing track ends inside the window, its player's next item only paces the fade`() {
         val out = RecordingSink()
-        val mixer = CrossfadeMixer(out)
+        val mixer = newMixer(out)
+        val outgoing = mixer.newLane().also(mixer::setLead)
+        val incoming = mixer.newLane().also(mixer::prepareIncoming)
+        val window = 4800
+        feed(incoming, 0, window, 960, { 0 }, { 10_000 })
+        assertTrue(mixer.beginFade(window.toLong(), Runnable {}))
+        feed(outgoing, 0, window / 2, 480, { 10_000 }, { 0 })
+
+        // Its track ends halfway; after the chain's re-flush the next item follows gaplessly.
+        outgoing.endOfStream(48_000, 2, PCM_16BIT)
+        outgoing.flush(48_000, 2, PCM_16BIT)
+        feed(outgoing, window / 2, window / 2, 480, { MARKER }, { MARKER })
+
+        assertTrue(mixer.isLead(incoming))
+        assertEquals(window, out.left.size)
+        // The outgoing side goes silent at its end instead of mixing in what its player plays
+        // next, while the incoming side keeps rising on the same curve.
+        assertTrue(out.left.drop(window / 2).all { it == 0 })
+        for (j in 0 until window) {
+            assertEquals("frame $j", 10_000 * sin(j.toDouble() / window * PI / 2), out.right[j].toDouble(), 1.0)
+        }
+    }
+
+    @Test
+    fun `aborting mid-fade ramps back instead of jumping, and the lane drains once it has`() {
+        val out = RecordingSink()
+        val mixer = newMixer(out)
         val outgoing = mixer.newLane().also(mixer::setLead)
         val incoming = mixer.newLane().also(mixer::prepareIncoming)
         val window = 4800
@@ -190,6 +308,8 @@ class CrossfadeMixerTest {
         val atAbort = out.left.size
 
         assertTrue(mixer.abortFade(outgoing))
+        // Routed straight to the FIFO now, the ramp would never render: the output would jump.
+        assertFalse(mixer.isDrained(outgoing))
         feed(outgoing, window / 2, 2 * CrossfadeMixer.RAMP_FRAMES, 480, { 10_000 }, { 0 })
 
         // Picks up where the fade left off (cos 45°), not at full level.
@@ -203,28 +323,47 @@ class CrossfadeMixerTest {
         assertTrue(out.left.drop(afterRamp).all { it == 10_000 })
         assertTrue(out.right.drop(afterRamp).all { it == 0 })
         assertTrue(mixer.isLead(outgoing))
+        assertTrue(mixer.isDrained(outgoing))
     }
 
     @Test
-    fun `a sink attached after the format flush is configured before its first buffer`() {
-        val route = RoutableSink()
-        route.flush(48_000, 2, C.ENCODING_PCM_16BIT)
-        route.handleBuffer(pcm(0 until 10, { 1 }, { 1 })) // nowhere to go yet
-        val sink = RecordingSink()
+    fun `a lane fails fast on anything but 48 kHz 16-bit stereo`() {
+        val lane = newMixer(RecordingSink()).let { mixer -> mixer.newLane().also(mixer::setLead) }
+        assertThrows(IllegalStateException::class.java) { lane.flush(44_100, 2, PCM_16BIT) }
+        assertThrows(IllegalStateException::class.java) { lane.endOfStream(48_000, 1, PCM_16BIT) }
+        assertThrows(IllegalStateException::class.java) { lane.flush(48_000, 2, C.ENCODING_PCM_FLOAT) }
+    }
 
-        route.attach(sink)
-        route.handleBuffer(pcm(0 until 10, { 1 }, { 1 }))
-        route.handleBuffer(pcm(0 until 10, { 1 }, { 1 }))
-        route.flush(44_100, 2, C.ENCODING_PCM_16BIT)
-        route.handleBuffer(pcm(0 until 10, { 1 }, { 1 }))
+    @Test
+    fun `a sink attached to a running tee is configured before its first buffer, and told an end of stream apart from a flush`() {
+        val tee = RoutableTee()
+        tee.configure(AudioProcessor.AudioFormat(48_000, 2, PCM_16BIT))
+        tee.flush(AudioProcessor.StreamMetadata.DEFAULT)
+        tee.queueInput(pcm(0 until 10, { 1 }, { 1 })) // nowhere to go yet
+        val sink = StreamEndRecordingSink()
+
+        tee.attach(sink)
+        tee.queueInput(pcm(0 until 10, { 1 }, { 1 }))
+        tee.queueInput(pcm(0 until 10, { 1 }, { 1 }))
+        tee.queueEndOfStream()
+        tee.configure(AudioProcessor.AudioFormat(44_100, 2, PCM_16BIT))
+        tee.flush(AudioProcessor.StreamMetadata.DEFAULT)
+        tee.queueInput(pcm(0 until 10, { 1 }, { 1 }))
+        // Any other sink gets an end of stream as a flush, as from TeeAudioProcessor.
+        val plain = RecordingSink()
+        tee.attach(plain, replayFormat = false)
+        tee.queueEndOfStream()
 
         assertEquals(
-            listOf("flush 48000/2/2", "buffer 10", "buffer 10", "flush 44100/2/2", "buffer 10"),
+            listOf("flush 48000/2/2", "buffer 10", "buffer 10", "end 48000/2/2", "flush 44100/2/2", "buffer 10"),
             sink.events,
         )
+        assertEquals(listOf("flush 44100/2/2"), plain.events)
     }
 
     private companion object {
+        const val PCM_16BIT = C.ENCODING_PCM_16BIT
+
         // The outgoing stream in the handoff tests: any of it after the window is a bug.
         const val MARKER = 12_345
     }

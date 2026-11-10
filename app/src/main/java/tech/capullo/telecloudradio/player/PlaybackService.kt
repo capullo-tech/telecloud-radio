@@ -28,7 +28,6 @@ import androidx.media3.exoplayer.Renderer
 import androidx.media3.exoplayer.audio.AudioRendererEventListener
 import androidx.media3.exoplayer.audio.AudioSink
 import androidx.media3.exoplayer.audio.DefaultAudioSink
-import androidx.media3.exoplayer.audio.TeeAudioProcessor
 import androidx.media3.exoplayer.mediacodec.MediaCodecSelector
 import androidx.media3.session.MediaSession
 import androidx.media3.session.MediaSessionService
@@ -88,7 +87,7 @@ fun MediaItem.trackKey(): TrackKey? {
  *
  * Audio path: ExoPlayer decodes the track; the sink chain forces the PCM to
  * 48000:16:2 ([ChannelMixing → Sonic] ), applies stereo balance and the track's
- * normalization gain, then a TeeAudioProcessor copies it into the snapserver FIFO. The
+ * normalization gain, then a tee ([RoutableTee]) copies it into the snapserver FIFO. The
  * AudioTrack output stays (it paces playback and provides the position clock) but player
  * volume is 0 - the audible output on this device is the local snapclient, which is
  * perfectly in sync with every other Snapcast/web listener on the LAN.
@@ -246,15 +245,17 @@ class PlaybackService : MediaSessionService() {
     /**
      * One player and the per-player parts of its sink chain. Processors keep per-stream state, so
      * two players can't share them: each crossfade builds a second deck for the incoming track.
-     * Both tees end in a [RoutableSink], because Media3 fixes a processor's destination at build
-     * time and a crossfade has to repoint them afterwards.
+     * Both tees are [RoutableTee]s, because Media3 fixes a processor's place in the chain at build
+     * time and a crossfade has to repoint them afterwards. [inputLead] is the player's sink, which
+     * measures how far its tees run ahead of its position clock.
      */
     private class Deck(
         val player: ExoPlayer,
         val balance: BalanceAudioProcessor,
         val gain: GainAudioProcessor,
-        val fifoRoute: RoutableSink,
-        val silenceRoute: RoutableSink,
+        val fifoRoute: RoutableTee,
+        val silenceRoute: RoutableTee,
+        val inputLead: InputLeadAudioSink,
     ) {
         /** This deck's way into the mixer while crossfade is on; null while its tee feeds the FIFO directly. */
         var lane: CrossfadeMixer.Lane? = null
@@ -447,20 +448,13 @@ class PlaybackService : MediaSessionService() {
             // Fires for the gapless addMediaItem advance as well as explicit setMediaItem jumps.
             trackStartedElapsedMs = SystemClock.elapsedRealtime()
             silenceSkipFiredForItem = false
-            // Apply its stored normalization gain: unity until the row exists (never analyzed,
-            // or analysis still running), then the stored value as soon as it is written, so a
-            // freshly downloaded track is corrected mid-play rather than only on its next play.
-            // The observer is replaced on every transition, so a late row can't touch the next item.
+            // Apply its stored normalization gain (see observeGain). The observer is replaced on
+            // every transition, so a late row can't touch the next item.
             gainJob?.cancel()
             val gain = primary?.gain ?: return
             gain.gain = 1f
             val key = mediaItem?.trackKey() ?: return
-            gainJob = serviceScope.launch {
-                trackGainDao.observe(key.chatId, key.messageId).collect { row ->
-                    gain.gain = row?.gainLinear ?: 1f
-                    Log.d(TAG, "normalization gain ${key.chatId}/${key.messageId} = ${gain.gain} (${row?.source ?: "none yet"})")
-                }
-            }
+            gainJob = observeGain(key) { gain.gain = it }
         }
 
         override fun onTimelineChanged(timeline: Timeline, reason: Int) {
@@ -544,8 +538,9 @@ class PlaybackService : MediaSessionService() {
     private fun buildDeck(): Deck {
         val balance = BalanceAudioProcessor().apply { this.balance = settings.balance.value }
         val gain = GainAudioProcessor()
-        val fifoRoute = RoutableSink()
-        val silenceRoute = RoutableSink()
+        val fifoRoute = RoutableTee()
+        val silenceRoute = RoutableTee()
+        var inputLead: InputLeadAudioSink? = null
         val renderersFactory = object : DefaultRenderersFactory(this) {
             // Prefer platform decoders, but fall back to the bundled Media3 FFmpeg extension (on the
             // classpath via capullo-audio) for formats the platform can't handle - widens codec
@@ -616,7 +611,7 @@ class PlaybackService : MediaSessionService() {
                 // lets 48kHz-native FLAC/Opus pass through with no resample (kills the resync-storm
                 // stutter); 44.1k content upsamples once to 48k.
                 val resampler = SonicAudioProcessor().apply { setOutputSampleRateHz(48000) }
-                return DefaultAudioSink.Builder(context)
+                val sink = DefaultAudioSink.Builder(context)
                     .setEnableFloatOutput(false) // keep the chain in 16-bit PCM
                     .setAudioProcessorChain(
                         DefaultAudioSink.DefaultAudioProcessorChain(
@@ -624,11 +619,12 @@ class PlaybackService : MediaSessionService() {
                             resampler,
                             balance,
                             gain,
-                            TeeAudioProcessor(silenceRoute),
-                            TeeAudioProcessor(fifoRoute),
+                            silenceRoute,
+                            fifoRoute,
                         ),
                     )
                     .build()
+                return InputLeadAudioSink(sink).also { inputLead = it }
             }
         }
         val player = ExoPlayer.Builder(this, renderersFactory)
@@ -653,7 +649,8 @@ class PlaybackService : MediaSessionService() {
         // Local audio comes from the snapclient; the tee sits pre-volume so the
         // FIFO always receives full-scale PCM.
         player.volume = 0f
-        return Deck(player, balance, gain, fifoRoute, silenceRoute)
+        // ExoPlayer.Builder.build() builds the renderers, and with them the sink, right away.
+        return Deck(player, balance, gain, fifoRoute, silenceRoute, checkNotNull(inputLead))
     }
 
     // The playlist lives in PlayerViewModel. ExoPlayer itself only ever sees at most two items
@@ -850,15 +847,21 @@ class PlaybackService : MediaSessionService() {
 
         // Crossfade. With the setting off nothing below runs: the tee feeds the FIFO directly and
         // no second player is ever built. On, a tick watches the primary's position for the point
-        // to preroll and then fade into the staged next track.
+        // to preroll and then fade into the staged next track. Turned off, the primary's tee keeps
+        // going through the mixer until that has nothing left a direct route would skip.
         serviceScope.launch {
             combine(settings.crossfadeEnabled, settings.crossfadeSeconds) { enabled, seconds ->
                 if (enabled) seconds * 1000L else 0L
             }.distinctUntilChanged().collectLatest { fadeMs ->
-                routeThroughMixer(fadeMs > 0L)
-                while (fadeMs > 0L) {
-                    crossfadeTick(fadeMs)
-                    delay(CROSSFADE_TICK_MS)
+                if (fadeMs > 0L) {
+                    routeThroughMixer()
+                    while (true) {
+                        crossfadeTick(fadeMs)
+                        delay(CROSSFADE_TICK_MS)
+                    }
+                } else {
+                    cancelCrossfade(promoteIfHandedOff = true)
+                    while (!detachFromMixer()) delay(CROSSFADE_TICK_MS)
                 }
             }
         }
@@ -896,27 +899,39 @@ class PlaybackService : MediaSessionService() {
         releaseSpeakerJob = null
     }
 
-    // Points the primary deck's FIFO tee at the mixer (crossfade on) or straight at the FIFO sink
-    // (off: the single-player path, with no mixer in between).
-    private fun routeThroughMixer(enabled: Boolean) {
-        if (!enabled) cancelCrossfade(promoteIfHandedOff = true)
+    // Crossfade on: points the primary deck's FIFO tee at its mixer lane. A lane still attached
+    // from before (see detachFromMixer) carries on as it is.
+    private fun routeThroughMixer() {
         val deck = primary ?: return
         val sink = fifoSink ?: return
-        if (enabled) {
-            if (deck.lane != null) return
-            val mixer = this.mixer ?: CrossfadeMixer(sink).also { this.mixer = it }
-            val lane = mixer.newLane()
-            mixer.setLead(lane)
-            deck.lane = lane
-            deck.fifoRoute.attach(lane, replayFormat = false)
-        } else {
-            if (deck.lane == null) return
-            deck.lane = null
-            // Straight to the FIFO from the next buffer. Whatever the lane still delays since a
-            // crossfade handed off to it (at most its AudioTrack buffer, see CrossfadeMixer) is skipped.
-            deck.fifoRoute.attach(sink, replayFormat = false)
-            mixer?.setLead(null)
-        }
+        if (deck.lane != null) return
+        val mixer = this.mixer ?: CrossfadeMixer(sink).also { this.mixer = it }
+        val lane = mixer.newLane()
+        mixer.setLead(lane)
+        deck.lane = lane
+        deck.fifoRoute.attach(lane, replayFormat = false)
+    }
+
+    // Crossfade off: points the primary deck's FIFO tee straight at the FIFO sink again (the
+    // single-player path, no mixer in between), but only once its lane has nothing left to render
+    // that a direct route would skip. That is the ramp back of a fade the switch abandoned
+    // (~50 ms), and the delay a handoff left the lane with (up to its AudioTrack prefill, see
+    // CrossfadeMixer), which only goes at a flush that drops it (seek, skip, stop) or at the end of
+    // the playlist, where the mixer writes it out. Until then the lane passes the PCM through,
+    // delayed, with no mixing. True once the tee feeds the FIFO directly.
+    private fun detachFromMixer(): Boolean {
+        val deck = primary ?: return true
+        val lane = deck.lane ?: return true
+        val mixer = mixer ?: return true
+        val sink = fifoSink ?: return true
+        // Nothing can start rendering in the lane again in between: with the setting off no
+        // crossfade arms, and a delay only comes from a handoff.
+        if (!mixer.isDrained(lane)) return false
+        deck.lane = null
+        // The lane stays the mixer's lead: a buffer the playback thread already handed it still
+        // passes straight through, and nothing reaches it after that one.
+        deck.fifoRoute.attach(sink, replayFormat = false)
+        return true
     }
 
     // The item PlayerViewModel staged right after the current one, with its track identity. Null
@@ -930,12 +945,12 @@ class PlaybackService : MediaSessionService() {
         return key to item
     }
 
-    // Runs every CROSSFADE_TICK_MS while crossfade is on. The fade has to end FADE_TAIL_GUARD_MS
-    // before the reported end of the track: the outgoing player's tee runs ahead of its position
-    // clock by up to its AudioTrack buffer, and past the end of the track that tee carries the
-    // gapless-staged next item, which must never be mixed in as "outgoing".
+    // Runs every CROSSFADE_TICK_MS while crossfade is on. Arms a crossfade PREROLL_LEAD_MS before
+    // the fade has to start, and starts it once the outgoing track has only the fade length left
+    // (see fadeRoomMs).
     private fun crossfadeTick(durationMs: Long) {
-        val player = primary?.player ?: return
+        val deck = primary ?: return
+        val player = deck.player
         val xf = crossfade
         if (xf != null && xf.fadeStartedElapsedMs > 0L && !crossfadeHandedOff() &&
             SystemClock.elapsedRealtime() - xf.fadeStartedElapsedMs > xf.fadeMs + CROSSFADE_HANDOFF_TIMEOUT_MS
@@ -947,18 +962,16 @@ class PlaybackService : MediaSessionService() {
             return
         }
         if (!player.isPlaying) return
-        val duration = player.duration
-        if (duration == C.TIME_UNSET || duration <= 0L) return
-        val remaining = duration - player.currentPosition
+        val room = fadeRoomMs(deck) ?: return
         if (xf == null) {
             val (target, item) = stagedNext(player) ?: return
             if (target == crossfadeSkip) return
-            if (remaining > durationMs + FADE_TAIL_GUARD_MS + PREROLL_LEAD_MS) return
-            if (remaining < FADE_TAIL_GUARD_MS + MIN_FADE_MS) return
+            if (room > durationMs + PREROLL_LEAD_MS) return
+            if (room < MIN_FADE_MS) return
             armCrossfade(target, item)
-        } else if (xf.ready && xf.fadeStartedElapsedMs == 0L && remaining <= durationMs + FADE_TAIL_GUARD_MS) {
+        } else if (xf.ready && xf.fadeStartedElapsedMs == 0L && room <= durationMs) {
             // Shortened if the incoming deck only became ready late.
-            val fadeMs = minOf(durationMs, remaining - FADE_TAIL_GUARD_MS)
+            val fadeMs = minOf(durationMs, room)
             if (fadeMs < MIN_FADE_MS) {
                 crossfadeSkip = xf.target
                 cancelCrossfade(promoteIfHandedOff = false)
@@ -968,6 +981,24 @@ class PlaybackService : MediaSessionService() {
         }
     }
 
+    // How long a fade starting now can last: one that ends with the outgoing track, measured where
+    // the mixer sees it. The fade is counted in the frames the outgoing tee delivers, and the tee
+    // runs ahead of the position clock by what the AudioTrack holds (measured, see
+    // InputLeadAudioSink), so ending with the tee would leave that much of the track unheard. A
+    // lane delayed since an earlier handoff mixes samples that much older, which it can still fade
+    // past the tee's end: there its later buffers carry the gapless-staged next item, so the mixer
+    // stops taking the lead's PCM from them. Never past the clock's own end of the track, though:
+    // there the player advances to that staged item, which cancels a crossfade that hasn't handed
+    // off yet. FADE_END_MARGIN_MS covers the tee delivering a buffer more than measured.
+    private fun fadeRoomMs(deck: Deck): Long? {
+        val player = deck.player
+        val duration = player.duration
+        if (duration == C.TIME_UNSET || duration <= 0L) return null
+        val teeLeadMs = deck.inputLead.inputLeadMs() ?: TEE_LEAD_FALLBACK_MS
+        val delayMs = mixer?.leadDelayMs() ?: 0L
+        return duration - player.currentPosition - maxOf(0L, teeLeadMs - delayMs) - FADE_END_MARGIN_MS
+    }
+
     private fun armCrossfade(target: TrackKey, item: MediaItem) {
         val xf = Crossfade(target, item)
         crossfade = xf
@@ -975,13 +1006,20 @@ class PlaybackService : MediaSessionService() {
         // its own gain processor straight into the capture ring, so prerolling at unity would fade
         // in at the wrong level. Keeps observing afterwards, like the primary's lookup, and becomes
         // the primary's observer at the handoff.
-        xf.gainJob = serviceScope.launch {
-            trackGainDao.observe(target.chatId, target.messageId).collect { row ->
-                val gain = row?.gainLinear ?: 1f
-                Log.d(TAG, "normalization gain ${target.chatId}/${target.messageId} = $gain (${row?.source ?: "none yet"}, crossfade)")
-                val deck = xf.deck
-                if (deck == null) startPreroll(xf, gain) else deck.gain.gain = gain
-            }
+        xf.gainJob = observeGain(target) { gain ->
+            val deck = xf.deck
+            if (deck == null) startPreroll(xf, gain) else deck.gain.gain = gain
+        }
+    }
+
+    // Applies [key]'s stored normalization gain through [onGain]: unity until the row exists (never
+    // analyzed, or analysis still running), then the stored value as soon as it is written, so a
+    // freshly downloaded track is corrected mid-play rather than only on its next play.
+    private fun observeGain(key: TrackKey, onGain: (Float) -> Unit): Job = serviceScope.launch {
+        trackGainDao.observe(key.chatId, key.messageId).collect { row ->
+            val gain = row?.gainLinear ?: 1f
+            Log.d(TAG, "normalization gain ${key.chatId}/${key.messageId} = $gain (${row?.source ?: "none yet"})")
+            onGain(gain)
         }
     }
 
@@ -1074,8 +1112,9 @@ class PlaybackService : MediaSessionService() {
     /**
      * Makes the crossfade's deck the primary once the mixer has handed the broadcast to it: the
      * playback listener, silence watchdog, gain observer and MediaSession move over and the
-     * outgoing deck is released. PlayerViewModel sees its staged item become current and syncs as
-     * for a gapless advance (see its onMediaItemTransition).
+     * outgoing deck is released. PlayerViewModel is told explicitly (ActiveTrackRepository): the
+     * session's player swap carries no transition reason of its own. It syncs to the new track as
+     * for a gapless advance once its controller shows it.
      */
     private fun completeCrossfade(xf: Crossfade) {
         if (crossfade !== xf) return // cancelled or reverted since the handoff was posted
@@ -1102,6 +1141,7 @@ class PlaybackService : MediaSessionService() {
         forwardingPlayer = sessionPlayer
         // While listening in, the stand-in keeps the session; the collector swaps this one in after.
         mediaSession?.let { if (it.player !== remoteListenPlayer) it.setPlayer(sessionPlayer) }
+        activeTrackRepository.emitCrossfadeHandoff(xf.target)
         outgoing.player.release()
         if (!playWhenReady) incoming.player.pause()
         Log.d(TAG, "crossfade handed off to ${xf.target.chatId}/${xf.target.messageId}, broadcast ${mixer?.leadDelayMs()} ms behind its tee")
@@ -1163,10 +1203,13 @@ class PlaybackService : MediaSessionService() {
         // How long playback stays paused before the local speaker is released.
         private const val RELEASE_SPEAKER_AFTER_PAUSE_MS = 30_000L
 
-        // Crossfade timing. A fade ends this long before the reported end of the track, which
-        // covers the outgoing tee running ahead of the position clock (≤ the 750 ms AudioTrack
-        // buffer) plus one tick of polling.
-        private const val FADE_TAIL_GUARD_MS = 1000L
+        // Crossfade timing. A fade is scheduled to end this much before the outgoing track does
+        // (see fadeRoomMs).
+        private const val FADE_END_MARGIN_MS = 100L
+
+        // How far the outgoing tee is taken to run ahead of the position clock until its sink has
+        // measured it: the largest AudioTrack buffer the devices have shown (750 ms).
+        private const val TEE_LEAD_FALLBACK_MS = 750L
 
         // How long before the fade the incoming deck starts prerolling.
         private const val PREROLL_LEAD_MS = 2000L
