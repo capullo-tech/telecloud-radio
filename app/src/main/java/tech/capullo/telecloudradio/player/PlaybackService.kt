@@ -484,6 +484,7 @@ class PlaybackService : MediaSessionService() {
                 // tee stalls READY forever.
                 fifoSink?.enableWrites()
                 // Release whatever was held since the pause, faded in.
+                tailPauseJob?.cancel()
                 fifoSink?.resumeOutput()
                 snapcastManager.startBroadcast(snapNowPlaying, snapController)
                 // Playing again after the speaker was released from ENDED/IDLE: starting a new
@@ -494,7 +495,7 @@ class PlaybackService : MediaSessionService() {
                 // ExoPlayer keeps draining a few hundred ms of PCM into the tee after a pause;
                 // reaching snapserver after it has gone idle, those bursts flip the stream back
                 // to playing and every speaker plays a fragment. Fade out and hold them instead.
-                fifoSink?.pauseOutput()
+                pauseFifoWhenTailDrained()
                 // Paused (or stalled) mid-crossfade: drop the incoming deck, the outgoing track ramps
                 // back up. If the audio has already handed off, the pending completeCrossfade promotes
                 // the incoming deck and carries this pause over to it.
@@ -886,6 +887,26 @@ class PlaybackService : MediaSessionService() {
 
     override fun onGetSession(controllerInfo: MediaSession.ControllerInfo) = mediaSession
 
+    // After a crossfade the lead lane can still be airing its delayed tail (paced, on the mixer's
+    // tail thread) when STATE_ENDED stops playback; pausing the FIFO then would hold and later
+    // discard the end of the track. Defer the pause until that lane has drained, unless playback
+    // resumes first. Without a lane (crossfade off) this pauses immediately, as before.
+    private var tailPauseJob: Job? = null
+
+    private fun pauseFifoWhenTailDrained() {
+        tailPauseJob?.cancel()
+        val lane = primary?.lane
+        val mixer = this.mixer
+        if (lane == null || mixer == null || mixer.isDrained(lane)) {
+            fifoSink?.pauseOutput()
+            return
+        }
+        tailPauseJob = serviceScope.launch {
+            while (!mixer.isDrained(lane)) delay(TAIL_DRAIN_POLL_MS)
+            if (!playerIsPlaying) fifoSink?.pauseOutput()
+        }
+    }
+
     private fun scheduleSpeakerRelease() {
         releaseSpeakerJob?.cancel()
         releaseSpeakerJob = serviceScope.launch {
@@ -1201,6 +1222,8 @@ class PlaybackService : MediaSessionService() {
         private const val SILENT_SKIP_MS = 8000L
 
         // How long playback stays paused before the local speaker is released.
+        private const val TAIL_DRAIN_POLL_MS = 20L
+
         private const val RELEASE_SPEAKER_AFTER_PAUSE_MS = 30_000L
 
         // Crossfade timing. A fade is scheduled to end this much before the outgoing track does

@@ -696,10 +696,11 @@ class CrossfadeMixer(
 
         private const val INITIAL_SCRATCH_BYTES = 64 * 1024
 
-        // One daemon thread, started on demand and let go when idle.
-        private fun newTailExecutor(): Executor = ThreadPoolExecutor(1, 1, 10, TimeUnit.SECONDS, LinkedBlockingQueue()) { task ->
+        // One daemon thread, started up front and kept: creating it on demand would run
+        // Thread.start() on the playback thread at a track boundary.
+        private fun newTailExecutor(): Executor = ThreadPoolExecutor(1, 1, 0, TimeUnit.SECONDS, LinkedBlockingQueue()) { task ->
             Thread(task, "CrossfadeTail").apply { isDaemon = true }
-        }.apply { allowCoreThreadTimeOut(true) }
+        }.apply { prestartCoreThread() }
 
         private fun checkFormat(sampleRateHz: Int, channelCount: Int, encoding: Int) {
             check(sampleRateHz == SAMPLE_RATE_HZ && channelCount == CHANNELS && encoding == C.ENCODING_PCM_16BIT) {
