@@ -9,7 +9,7 @@ import java.nio.ByteBuffer
 import java.nio.ByteOrder
 
 /**
- * Taps the post-decode PCM (via its own [TeeAudioProcessor]) and records the last time *audible*
+ * Taps the post-decode PCM (via its own tee, a [RoutableTee]) and records the last time *audible*
  * audio flowed through the sink, in [SystemClock.elapsedRealtime]. PlaybackService's watchdog polls
  * [lastAudibleElapsedMs] to decide whether a track that claims to be playing is actually producing
  * sound.
