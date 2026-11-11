@@ -32,16 +32,16 @@ class SnapcastViewModel @Inject constructor(
         httpPort: Int = SnapcastPorts.HTTP,
     ) = snapcastManager.connectListen(host, port, httpPort)
 
-    // Manual listen-in: the user types the HTTP port they know (from the web-player URL), not the
-    // hidden random stream port. Resolve the real stream port via the broadcaster's listen.json; if
-    // that fails (stock/legacy server, or the typed port really was a stream port), fall back to
+    // Manual listen-in: the user types whichever port they know, usually the HTTP port from the
+    // web-player URL. A broadcaster's ports are one consecutive stream/tcp/http block, so resolve()
+    // probes the typed port and the two above it for its listen.json and learns all three. If nothing
+    // resolves (stock/legacy server, or the typed port really was a stream port), fall back to
     // treating the typed port as a direct stream port with the default control port.
     fun connectManually(host: String, typedPort: Int?) {
         viewModelScope.launch {
-            val httpGuess = typedPort ?: SnapcastPorts.HTTP
-            val ports = SnapserverListenInfo.fetch(host, httpGuess)
+            val ports = SnapserverListenInfo.resolve(host, typedPort, defaultHttpPort = SnapcastPorts.HTTP)
             if (ports != null) {
-                snapcastManager.connectListen(host, ports.streamPort, httpGuess)
+                snapcastManager.connectListen(host, ports.streamPort, ports.httpPort)
             } else {
                 snapcastManager.connectListen(host, typedPort ?: SnapcastPorts.STREAM, SnapcastPorts.HTTP)
             }
