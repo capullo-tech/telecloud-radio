@@ -90,6 +90,7 @@ fun AuthScreen(onAuthenticated: () -> Unit, viewModel: AuthViewModel = hiltViewM
                     CredentialsForm(
                         onSubmit = viewModel::submitCredentials,
                         onBack = viewModel::restartSetup,
+                        submitting = submitting,
                     )
             }
             is AuthState.WaitPhone ->
@@ -278,7 +279,11 @@ private fun CodeForm(
 }
 
 @Composable
-private fun CredentialsForm(onSubmit: (apiId: String, apiHash: String) -> Unit, onBack: () -> Unit) {
+private fun CredentialsForm(
+    onSubmit: (apiId: String, apiHash: String) -> Unit,
+    onBack: () -> Unit,
+    submitting: Boolean,
+) {
     var apiId by remember { mutableStateOf("") }
     var apiHash by remember { mutableStateOf("") }
     AuthColumn {
@@ -313,12 +318,12 @@ private fun CredentialsForm(onSubmit: (apiId: String, apiHash: String) -> Unit, 
         )
         Button(
             onClick = { onSubmit(apiId, apiHash) },
-            enabled = apiId.isNotBlank() && apiHash.isNotBlank(),
+            enabled = apiId.isNotBlank() && apiHash.isNotBlank() && !submitting,
             modifier = Modifier.fillMaxWidth(),
         ) {
             Text("Continue")
         }
-        TextButton(onClick = onBack) { Text("Back") }
+        TextButton(onClick = onBack, enabled = !submitting) { Text("Back") }
     }
 }
 

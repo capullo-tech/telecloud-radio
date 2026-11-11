@@ -9,9 +9,12 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import dagger.hilt.android.lifecycle.HiltViewModel
 import dagger.hilt.android.qualifiers.ApplicationContext
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
@@ -28,7 +31,7 @@ import javax.inject.Provider
 enum class SetupStep { Phone, Code, Manual }
 
 // my.telegram.org's own page waits this long before offering "Resend code".
-const val SETUP_RESEND_SECONDS = 42
+internal const val SETUP_RESEND_SECONDS = 42
 
 @HiltViewModel
 class AuthViewModel @Inject constructor(
@@ -93,13 +96,25 @@ class AuthViewModel @Inject constructor(
                     }
                 }
         }
+        // Escape from the spinner if TDLib never reaches WaitPhone: drop the pending phone so the
+        // (prefilled) phone form shows instead. collectLatest cancels the timer once it is consumed.
+        viewModelScope.launch {
+            autoPhonePending.collectLatest { phone ->
+                if (phone == null) return@collectLatest
+                delay(AUTO_PHONE_TIMEOUT_MS)
+                Log.w(TAG, "TDLib did not ask for the phone in time; showing the phone form")
+                savedState.remove<String>(KEY_TDLIB_PHONE)
+            }
+        }
     }
 
     fun submitSetupPhone(rawPhone: String) = submit { sendSetupCode(normalizePhone(rawPhone)) }
 
     fun resendSetupCode() = submit { sendSetupCode(setupPhone.value) }
 
+    // A fresh my.telegram.org session per sent code, so a resend never reuses a logged-in cookie jar.
     private suspend fun sendSetupCode(phone: String) {
+        closeClient()
         val randomHash = client().sendCode(phone)
         Log.d(TAG, "my.telegram.org code sent")
         savedState[KEY_PHONE] = phone
@@ -111,11 +126,17 @@ class AuthViewModel @Inject constructor(
     fun submitSetupCode(code: String) = submit {
         val phone = setupPhone.value
         val randomHash = savedState.get<String>(KEY_RANDOM_HASH).orEmpty()
-        // A wrong code throws here and the error dialog keeps the user on the code step.
-        client().login(phone, randomHash, code.trim())
+        // A wrong code throws here and the error dialog keeps the user on the code step. Once
+        // accepted the code is spent, so a retry after a failed fetch must not log in again.
+        val client = client()
+        if (!client.loggedIn) client.login(phone, randomHash, code.trim())
         val fetched = try {
-            client().fetchCredentials()
-        } catch (e: MyTelegramOrgException) {
+            client.fetchCredentials()
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            // Site change, refused app creation, timeout, no network: the code can't be reused,
+            // so go to the manual form rather than leave the user retrying a spent code.
             savedState[KEY_STEP] = SetupStep.Manual
             Log.w(TAG, "my.telegram.org credentials fetch failed", e)
             _error.value = "${e.message}\n\nEnter your API ID and hash manually."
@@ -149,10 +170,10 @@ class AuthViewModel @Inject constructor(
             _error.value = "API Hash cannot be empty"
             return
         }
-        // setupParameters() is idempotent TDLib init (safe on a repeated tap); the guarded
-        // submit() below protects the phone/code/password steps where a double-fire is the problem.
-        credentials.save(id, apiHash.trim())
-        repository.setupParameters()
+        submit {
+            credentials.save(id, apiHash.trim())
+            repository.setupParameters()
+        }
     }
 
     fun submitPhone(rawPhone: String) = submit(onFinish = { _changingNumber.value = false }) {
@@ -258,6 +279,7 @@ class AuthViewModel @Inject constructor(
 
     private companion object {
         const val TAG = "TeleCloudAuth"
+        const val AUTO_PHONE_TIMEOUT_MS = 30_000L
         val RETRY_AFTER = Regex("""(?i)retry after (\d+)""")
         const val KEY_CODE_SENT_AT = "setup_code_sent_at"
         const val KEY_STEP = "setup_step"

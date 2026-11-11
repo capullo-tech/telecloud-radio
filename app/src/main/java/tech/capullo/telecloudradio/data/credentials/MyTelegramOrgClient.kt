@@ -2,6 +2,7 @@ package tech.capullo.telecloudradio.data.credentials
 
 import io.ktor.client.HttpClient
 import io.ktor.client.engine.okhttp.OkHttp
+import io.ktor.client.plugins.HttpTimeout
 import io.ktor.client.plugins.cookies.HttpCookies
 import io.ktor.client.request.forms.submitForm
 import io.ktor.client.request.get
@@ -34,8 +35,17 @@ class MyTelegramOrgClient @Inject constructor() : Closeable {
 
     private val http = HttpClient(OkHttp) {
         install(HttpCookies)
+        // Explicit, so a hung site fails fast into the manual-entry fallback whatever the engine defaults.
+        install(HttpTimeout) {
+            connectTimeoutMillis = 10_000
+            requestTimeoutMillis = 15_000
+        }
         expectSuccess = false
     }
+
+    // True once [login] succeeded: the code is spent, a retry must go straight to [fetchCredentials].
+    var loggedIn = false
+        private set
 
     // Asks Telegram to send a login code to the account's Telegram app. Returns the random_hash that
     // must accompany that code in [login].
@@ -64,6 +74,7 @@ class MyTelegramOrgClient @Inject constructor() : Closeable {
         val body = response.bodyAsText()
         val ok = (parseOrThrow(response, body) as? JsonPrimitive)?.booleanOrNull == true
         if (!ok) throw MyTelegramOrgException(errorText(response, body))
+        loggedIn = true
     }
 
     // Reads the API ID/Hash from /apps, creating the app first if the account has none.
