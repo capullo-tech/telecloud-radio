@@ -6,7 +6,6 @@ import android.content.Intent
 import android.os.Handler
 import android.os.Looper
 import android.os.SystemClock
-import android.util.Base64
 import android.util.Log
 import androidx.annotation.OptIn
 import androidx.media3.common.AudioAttributes
@@ -59,6 +58,8 @@ import tech.capullo.audio.contracts.PlaybackController
 import tech.capullo.audio.player.BalanceAudioProcessor
 import tech.capullo.audio.player.FifoAudioBufferSink
 import tech.capullo.audio.player.GainAudioProcessor
+import tech.capullo.audio.snapcast.SnapcastArt
+import tech.capullo.audio.snapcast.SnapcastArtwork
 import tech.capullo.audio.snapcast.firstArtist
 import tech.capullo.audio.tunnel.TunnelManager
 import tech.capullo.telecloudradio.MainActivity
@@ -298,7 +299,7 @@ class PlaybackService : MediaSessionService() {
     // The engine's SnapcontrolPlugin is contract-driven: a StateFlow<NowPlaying> (read) + a
     // PlaybackController (transport), replacing Telecloud's former fat SnapcontrolCallbacks.
     // buildSnapNowPlaying() maps the active Telegram track onto a NowPlaying; artwork is the
-    // track's embedded picture as base64 (the mapper expects NowPlaying.artworkBase64).
+    // track's embedded picture, published through SnapcastArtwork (see snapArt below).
     // MutableStateFlow is-a StateFlow, so it satisfies the plugin's read-only param directly.
     private val snapNowPlaying = MutableStateFlow(NowPlaying.EMPTY)
 
@@ -314,32 +315,50 @@ class PlaybackService : MediaSessionService() {
         override fun seekTo(positionMs: Long) {} // playlist next/prev only - position not driven here
     }
 
-    // Base64 art is expensive (an 800x800 JPEG → a ~300KB string) and changes only per track, but
-    // buildSnapNowPlaying() runs on every isPlaying flip. Cache the encoding keyed on the source
-    // bytes by identity - the same ByteArray instance is reused for a track's lifetime.
-    private var cachedArtBytes: ByteArray? = null
-    private var cachedArtBase64: String? = null
+    // Art for the snapserver push. Full-size art embedded in the metadata stalls the broadcast at
+    // every track change, so SnapcastArtwork writes the picture where our snapserver serves it
+    // (`artUrl`) and only a tiny thumbnail rides in `artData`. Publishing writes a file and decodes
+    // the image, so it runs in the background once per new picture (keyed on the bytes by identity:
+    // the same ByteArray is reused for a track's lifetime) and the now-playing is re-published when
+    // it lands. Until then the push goes out without art.
+    private val snapArtwork by lazy { SnapcastArtwork(applicationContext) }
 
-    private fun artBase64(bytes: ByteArray?): String? {
-        if (bytes == null) return null
-        if (bytes !== cachedArtBytes) {
-            cachedArtBytes = bytes
-            cachedArtBase64 = Base64.encodeToString(bytes, Base64.NO_WRAP)
+    @Volatile private var snapArtBytes: ByteArray? = null
+
+    @Volatile private var snapArt: SnapcastArt? = null
+    private var snapArtJob: Job? = null
+
+    private fun snapArt(bytes: ByteArray?): SnapcastArt? {
+        if (bytes !== snapArtBytes) {
+            snapArtBytes = bytes
+            snapArt = null
+            snapArtJob?.cancel()
+            if (bytes != null) {
+                snapArtJob = serviceScope.launch {
+                    val art = snapArtwork.publish(bytes)
+                    if (snapArtBytes === bytes) {
+                        snapArt = art
+                        publishNowPlaying()
+                    }
+                }
+            }
         }
-        return cachedArtBase64
+        return snapArt
     }
 
     private fun buildSnapNowPlaying(): NowPlaying {
         val playback = activeTrackRepository.activePlayback.value
         val canSkip = playback != null
+        val art = snapArt(playback?.albumArt)
         return NowPlaying(
             title = playback?.let { it.track.title ?: it.track.fileName } ?: "",
             artist = playback?.track?.performer ?: "",
             album = playback?.chatTitle ?: "",
-            artworkBase64 = artBase64(playback?.albumArt),
+            artworkBase64 = art?.thumbnailBase64,
             isPlaying = playerIsPlaying,
             canGoNext = canSkip,
             canGoPrevious = canSkip,
+            extras = art?.let { mapOf("artUrl" to it.urlPath) } ?: emptyMap(),
         )
     }
 
