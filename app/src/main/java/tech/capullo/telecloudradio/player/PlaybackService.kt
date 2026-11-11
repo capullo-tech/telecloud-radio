@@ -263,8 +263,8 @@ class PlaybackService : MediaSessionService() {
     // the same ByteArray is reused for a track's lifetime) and the now-playing is re-published when
     // it lands. Until then the push goes out without art.
     private val snapArtwork by lazy { SnapcastArtwork(applicationContext) }
-    private var snapArtBytes: ByteArray? = null
-    private var snapArt: SnapcastArt? = null
+    @Volatile private var snapArtBytes: ByteArray? = null
+    @Volatile private var snapArt: SnapcastArt? = null
     private var snapArtJob: Job? = null
 
     private fun snapArt(bytes: ByteArray?): SnapcastArt? {
