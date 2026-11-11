@@ -174,6 +174,27 @@ class SettingsRepository @Inject constructor(@ApplicationContext context: Contex
         _balance.value = clamped
     }
 
+    // Crossfade between consecutive tracks instead of the plain gapless join. Off by default;
+    // flows so PlaybackService picks up a toggle or a new length without a restart.
+    private val _crossfadeEnabled = MutableStateFlow(prefs.getBoolean("crossfade_enabled", false))
+    val crossfadeEnabled: StateFlow<Boolean> = _crossfadeEnabled.asStateFlow()
+
+    fun setCrossfadeEnabled(value: Boolean) {
+        prefs.edit().putBoolean("crossfade_enabled", value).apply()
+        _crossfadeEnabled.value = value
+    }
+
+    private val _crossfadeSeconds = MutableStateFlow(
+        prefs.getInt("crossfade_seconds", DEFAULT_CROSSFADE_SECONDS).coerceIn(CROSSFADE_SECONDS_RANGE),
+    )
+    val crossfadeSeconds: StateFlow<Int> = _crossfadeSeconds.asStateFlow()
+
+    fun setCrossfadeSeconds(value: Int) {
+        val clamped = value.coerceIn(CROSSFADE_SECONDS_RANGE)
+        prefs.edit().putInt("crossfade_seconds", clamped).apply()
+        _crossfadeSeconds.value = clamped
+    }
+
     // This device's own snapclient spatial role - persisted so a set-once L/R + latency + volume
     // arrangement survives a restart. Defaults = today's behaviour (stereo / 100% / 0ms).
     var snapclientChannel: String
@@ -193,4 +214,9 @@ class SettingsRepository @Inject constructor(@ApplicationContext context: Contex
         set(value) {
             prefs.edit().putInt("snapclient_latency", value).apply()
         }
+
+    companion object {
+        const val DEFAULT_CROSSFADE_SECONDS = 6
+        val CROSSFADE_SECONDS_RANGE = 2..12
+    }
 }
