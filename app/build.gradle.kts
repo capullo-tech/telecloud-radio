@@ -9,6 +9,20 @@ plugins {
     alias(libs.plugins.hilt)
 }
 
+// Transitive lib-tdlib-android (via capullo-source-telegram's pin 11850ef) ships a truncated
+// x86_64 libtdjni.so: its ELF header declares a section-header table at offset 22,883,448
+// (+1,728) but the file ends at 5,538,088 bytes, so dlopen fails on every x86_64 device and
+// emulator ("invalid shdr offset/size: 22883448/1728") and the app crashes in
+// Application.onCreate - the CI emulator matrix (EmulatorSmoke.yml) caught this on all
+// x86_64 API legs; the 32-bit x86 slice is intact, which is why only x86_64 dies.
+// Force the fixed mirror build (capullo-tech/lib-tdlib-android#1, jitpack commit below, all
+// four ABIs verified ELF-complete). REMOVE once capullo-source-telegram bumps libTdlibAndroid.
+configurations.all {
+    resolutionStrategy.force(
+        "com.github.capullo-tech:lib-tdlib-android:1989b55563a62a3e5320fbc73800452b7d4b243f",
+    )
+}
+
 android {
     namespace = "tech.capullo.telecloudradio"
     compileSdk = 36
