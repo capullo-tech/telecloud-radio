@@ -19,7 +19,6 @@ import androidx.media3.common.Player
 import androidx.media3.common.Timeline
 import androidx.media3.common.audio.ChannelMixingAudioProcessor
 import androidx.media3.common.audio.ChannelMixingMatrix
-import androidx.media3.common.audio.SonicAudioProcessor
 import androidx.media3.common.util.UnstableApi
 import androidx.media3.exoplayer.DefaultRenderersFactory
 import androidx.media3.exoplayer.ExoPlayer
@@ -57,7 +56,9 @@ import tech.capullo.audio.contracts.NowPlaying
 import tech.capullo.audio.contracts.PlaybackController
 import tech.capullo.audio.player.BalanceAudioProcessor
 import tech.capullo.audio.player.FifoAudioBufferSink
+import tech.capullo.audio.player.FixedRateResampler
 import tech.capullo.audio.player.GainAudioProcessor
+import tech.capullo.audio.player.HiResDecimator
 import tech.capullo.audio.snapcast.SnapcastArt
 import tech.capullo.audio.snapcast.SnapcastArtwork
 import tech.capullo.audio.snapcast.firstArtist
@@ -628,14 +629,19 @@ class PlaybackService : MediaSessionService() {
                 }
                 // LOCKSTEP with SnapserverProcess.SAMPLE_FORMAT (48000): the FIFO the tee writes is
                 // read by snapserver at that rate, so this resampler must output the same. 48000
-                // lets 48kHz-native FLAC/Opus pass through with no resample (kills the resync-storm
-                // stutter); 44.1k content upsamples once to 48k.
-                val resampler = SonicAudioProcessor().apply { setOutputSampleRateHz(48000) }
+                // lets 48kHz-native FLAC/Opus pass through with no resample; 44.1k content upsamples
+                // once to 48k. FixedRateResampler, not a bare SonicAudioProcessor: the latter forgets
+                // its target on every sink reset (each MP3<->FLAC decoder switch), after which 44.1k
+                // PCM hit the 48k FIFO raw - the resync-storm crackle.
+                val resampler = FixedRateResampler(48000)
                 val sink = DefaultAudioSink.Builder(context)
                     .setEnableFloatOutput(false) // keep the chain in 16-bit PCM
                     .setAudioProcessorChain(
                         DefaultAudioSink.DefaultAudioProcessorChain(
                             mixer,
+                            // Anti-alias low-pass + decimation for >48k input (Sonic has none:
+                            // a 192k master's ultrasonic content would fold into the audible band).
+                            HiResDecimator(),
                             resampler,
                             balance,
                             gain,
