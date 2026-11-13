@@ -160,7 +160,11 @@ jobs:
         run: |
           set -eu
           yes | sdkmanager --licenses > /dev/null || true
-          sdkmanager --install "system-images;android-$ANDROID_API;$ANDROID_TARGET;$ANDROID_ABI" > /dev/null
+          # "emulator" explicitly: installing pre-24 system images drags dependency
+          # resolution that leaves the runner's emulator package without metadata, and
+          # avdmanager then refuses with "emulator package must be installed!" (seen on
+          # the API 23-27 legs; harmless where the image installs clean).
+          sdkmanager --install "emulator" "system-images;android-$ANDROID_API;$ANDROID_TARGET;$ANDROID_ABI" > /dev/null
           echo no | avdmanager create avd --force -n smoke \
             --package "system-images;android-$ANDROID_API;$ANDROID_TARGET;$ANDROID_ABI"
           # Visible confirmation - a create that silently lands nowhere dies here, not three
