@@ -23,7 +23,7 @@ plugins {
 // capullo-source-telegram bumps libTdlibAndroid.
 configurations.all {
     resolutionStrategy.force(
-        "com.github.capullo-tech:lib-tdlib-android:a4747decf7dd793cc25e7655e81b71576404e6e9",
+        "com.github.capullo-tech:lib-tdlib-android:3fee328af0740d31342b6eec61b715f3e7018d46",
     )
 }
 
