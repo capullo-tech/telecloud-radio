@@ -16,13 +16,14 @@ plugins {
 // Application.onCreate - the CI emulator matrix (EmulatorSmoke.yml) caught this on all
 // x86_64 API legs; the 32-bit x86 slice is intact, which is why only x86_64 dies.
 // The mirror's x86_64 OpenSSL pair was ALSO foreign to the pinned tdjni build (dlopen:
-// "cannot locate symbol SSL_CTX_free"), so the fix forces a lib-tdlib-android build whose
-// x86_64 tdjni + libsslx + libcryptox are all byte-verified against the pinned upstream
-// (capullo-tech/lib-tdlib-android#1, commit below). REMOVE once capullo-source-telegram
-// bumps libTdlibAndroid.
+// "cannot locate symbol SSL_CTX_free"), and the pair committed upstream at 63524bd14b is
+// itself corrupt (DT_STRTAB unmapped - linker SIGSEGV). The fix forces a lib-tdlib-android
+// build whose x86_64 tdjni + libsslx + libcryptox are all byte-verified against the rebuilt
+// TGX pair from bc0d3817d1 (capullo-tech/lib-tdlib-android#1, commit below). REMOVE once
+// capullo-source-telegram bumps libTdlibAndroid.
 configurations.all {
     resolutionStrategy.force(
-        "com.github.capullo-tech:lib-tdlib-android:e4d38e941b6c53400b1a02ba6750a943fec0230d",
+        "com.github.capullo-tech:lib-tdlib-android:1ac60e40c456e9f7ff1b42339f52c0ae64f369e7",
     )
 }
 
