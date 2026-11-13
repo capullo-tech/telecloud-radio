@@ -23,6 +23,7 @@ palette = "1.0.0"                # album-art colour extraction for the dynamic t
 securityCrypto = "1.1.0-alpha06"
 startupRuntime = "1.2.0"
 mockk = "1.14.6"
+uiautomator = "2.3.0"            # device-level smoke test (MainSmokeTest, EmulatorSmoke CI)
 
 [libraries]
 # jitpack multi-module coords: capullo-audio-ui is ONLY at the nested group
@@ -43,3 +44,4 @@ androidx-palette-ktx = { group = "androidx.palette", name = "palette-ktx", versi
 androidx-security-crypto = { group = "androidx.security", name = "security-crypto", version.ref = "securityCrypto" }
 androidx-startup-runtime = { group = "androidx.startup", name = "startup-runtime", version.ref = "startupRuntime" }
 mockk = { group = "io.mockk", name = "mockk", version.ref = "mockk" }
+androidx-test-uiautomator = { group = "androidx.test.uiautomator", name = "uiautomator", version.ref = "uiautomator" }
