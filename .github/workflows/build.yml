@@ -32,6 +32,8 @@ jobs:
       # dependency (which depends on lib-tdlib-android) - no setup_tdlib.sh / git-lfs step anymore.
       - name: Check spotless
         run: ./gradlew spotlessCheck --no-configuration-cache
+      - name: Unit tests
+        run: ./gradlew :app:testDebugUnitTest
       - name: Decode release keystore
         env:
           KEYSTORE_BASE64: ${{ secrets.RELEASE_KEYSTORE_BASE64 }}
