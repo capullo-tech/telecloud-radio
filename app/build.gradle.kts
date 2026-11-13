@@ -15,11 +15,14 @@ plugins {
 // emulator ("invalid shdr offset/size: 22883448/1728") and the app crashes in
 // Application.onCreate - the CI emulator matrix (EmulatorSmoke.yml) caught this on all
 // x86_64 API legs; the 32-bit x86 slice is intact, which is why only x86_64 dies.
-// Force the fixed mirror build (capullo-tech/lib-tdlib-android#1, jitpack commit below, all
-// four ABIs verified ELF-complete). REMOVE once capullo-source-telegram bumps libTdlibAndroid.
+// The mirror's x86_64 OpenSSL pair was ALSO foreign to the pinned tdjni build (dlopen:
+// "cannot locate symbol SSL_CTX_free"), so the fix forces a lib-tdlib-android build whose
+// x86_64 tdjni + libsslx + libcryptox are all byte-verified against the pinned upstream
+// (capullo-tech/lib-tdlib-android#1, commit below). REMOVE once capullo-source-telegram
+// bumps libTdlibAndroid.
 configurations.all {
     resolutionStrategy.force(
-        "com.github.capullo-tech:lib-tdlib-android:1989b55563a62a3e5320fbc73800452b7d4b243f",
+        "com.github.capullo-tech:lib-tdlib-android:e4d38e941b6c53400b1a02ba6750a943fec0230d",
     )
 }
 
