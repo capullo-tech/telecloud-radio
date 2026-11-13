@@ -181,7 +181,11 @@ jobs:
             -dns-server 8.8.8.8 \
             > /tmp/emulator.log 2>&1 &
           deadline=$(( $(date +%s) + BOOT_TIMEOUT ))
-          until [ "$(adb shell getprop sys.boot_completed 2>/dev/null | tr -d '\r')" = "1" ]; do
+          # adb_to: every guest probe gets a hard ceiling - old images (23-27) can wedge
+          # adbd mid-boot (the API 23 leg once hung the install step for 40+ minutes on a
+          # bare adb call); a timeout converts that into the loop's normal retry path.
+          adb_to() { timeout "$1" adb "${@:2}"; }
+          until [ "$(adb_to 20 shell getprop sys.boot_completed 2>/dev/null | tr -d '\r')" = "1" ]; do
             if [ "$(date +%s)" -ge "$deadline" ]; then
               echo "::error::emulator did not boot within ${BOOT_TIMEOUT}s - emulator log tail:"
               tail -50 /tmp/emulator.log
@@ -203,11 +207,11 @@ jobs:
           # sys.user.0.ce_available=true before anything else touches the guest.
           unlocked=0
           for _ in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20 21 22 23 24 25 26 27 28 29 30 31 32 33 34 35 36; do
-            if adb shell dumpsys user 2>/dev/null | tr -d '\r' | grep -q RUNNING_UNLOCKED; then
+            if adb_to 20 shell dumpsys user 2>/dev/null | tr -d '\r' | grep -q RUNNING_UNLOCKED; then
               unlocked=1
               break
             fi
-            adb shell wm dismiss-keyguard >/dev/null 2>&1 || true
+            adb_to 15 shell wm dismiss-keyguard >/dev/null 2>&1 || true
             sleep 5
           done
           if [ "$unlocked" = "1" ]; then
@@ -217,7 +221,7 @@ jobs:
           fi
           ce_ok=0
           for _ in 1 2 3 4 5 6 7 8 9 10 11 12; do
-            if [ "$(adb shell getprop sys.user.0.ce_available 2>/dev/null | tr -d '\r')" = "true" ]; then
+            if [ "$(adb_to 20 shell getprop sys.user.0.ce_available 2>/dev/null | tr -d '\r')" = "true" ]; then
               ce_ok=1
               break
             fi
@@ -235,7 +239,7 @@ jobs:
           # three checks in a row means no launcher at all (aosp_atd), stable by definition.
           last=""; stable=0; empty=0
           for _ in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20 21 22 23 24; do
-            cur=$(adb shell pidof com.google.android.apps.nexuslauncher 2>/dev/null | tr -d '\r' || true)
+            cur=$(adb_to 20 shell pidof com.google.android.apps.nexuslauncher 2>/dev/null | tr -d '\r' || true)
             if [ -z "$cur" ]; then
               empty=$((empty+1))
               if [ "$empty" -ge 3 ]; then break; fi
@@ -252,21 +256,21 @@ jobs:
           # Post-boot settle, best-effort on purpose: a just-booted guest can refuse the input
           # service for a few seconds (the unlock keyevent is what killed the action-based
           # runs) and none of it is required for the smoke test to be meaningful.
-          for _ in 1 2 3 4 5; do adb shell input keyevent 82 >/dev/null 2>&1 && break; sleep 3; done
-          adb shell wm dismiss-keyguard >/dev/null 2>&1 || true
+          for _ in 1 2 3 4 5; do adb_to 15 shell input keyevent 82 >/dev/null 2>&1 && break; sleep 3; done
+          adb_to 15 shell wm dismiss-keyguard >/dev/null 2>&1 || true
           # Private DNS off, on every leg: TDLib underneath the auth screen must resolve the
           # Telegram endpoints, and on the API 28-32 images DNS-over-TLS to the
           # runner-provided resolver is refused outright (netd logs DnsTlsSocket errno=111)
           # with no usable fallback - DNS dies and TDLib's connectivity detection with it.
           # Harmless where DNS already works (and a no-op below API 28).
-          adb shell settings put global private_dns_mode off >/dev/null 2>&1 || true
+          adb_to 15 shell settings put global private_dns_mode off >/dev/null 2>&1 || true
           # Connectivity probe into the log: distinguishes "guest cannot reach Telegram at
           # all" from "the app cannot start TDLib" when an auth leg goes red.
           echo 'Network probe (ping www.telegram.org):'
-          adb shell ping -c 1 www.telegram.org 2>&1 | head -2 || true
-          adb shell settings put global window_animation_scale 0.0 >/dev/null 2>&1 || true
-          adb shell settings put global transition_animation_scale 0.0 >/dev/null 2>&1 || true
-          adb shell settings put global animator_duration_scale 0.0 >/dev/null 2>&1 || true
+          adb_to 30 shell ping -c 1 www.telegram.org 2>&1 | head -2 || true
+          adb_to 15 shell settings put global window_animation_scale 0.0 >/dev/null 2>&1 || true
+          adb_to 15 shell settings put global transition_animation_scale 0.0 >/dev/null 2>&1 || true
+          adb_to 15 shell settings put global animator_duration_scale 0.0 >/dev/null 2>&1 || true
       - name: Install APKs, run the launch smoke test
         run: |
           set -euo pipefail
@@ -280,14 +284,19 @@ jobs:
           # against a package whose APK binding reads "inode == 0" and every activity lookup
           # fails. So: wait for the service to actually answer, retry the installs anyway, and
           # do not instrument until the package genuinely resolves.
+          # Every adb call below is wrapped in `timeout`: on the old images (23-27) a wedged
+          # adbd after boot blocks the bare calls FOREVER - the API 23 leg sat 40+ minutes
+          # in this step on an unbounded `adb install` before the job cap killed it. The
+          # wrappers turn a hang into a retry-able failure.
+          adb_to() { timeout "$1" adb "${@:2}"; }
           for _ in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15; do
-            adb shell pm path android >/dev/null 2>&1 && break
+            adb_to 20 shell pm path android >/dev/null 2>&1 && break
             echo "package service not answering yet, waiting..."
             sleep 2
           done
           install_with_retry() {
             for _ in 1 2 3 4 5 6 7 8 9 10; do
-              if adb install -r -g "$1"; then return 0; fi
+              if adb_to 300 install -r -g "$1"; then return 0; fi
               echo "install of $1 refused (service settling), retrying in 5s..."
               sleep 5
             done
@@ -298,16 +307,18 @@ jobs:
           # clear the 'main' log" with a non-zero exit - that killed the API 26 leg before
           # any install ran. This is diagnostic hygiene, not a gate; the gates are the OK /
           # failure markers below.
-          adb logcat -c || true
+          adb_to 15 logcat -c || true
           install_with_retry apks/debug/app-debug.apk
           install_with_retry apks/androidTest/debug/app-debug-androidTest.apk
           for _ in 1 2 3 4 5 6 7 8 9 10; do
-            adb shell pm path tech.capullo.telecloudradio | grep -q apk && break
+            adb_to 20 shell pm path tech.capullo.telecloudradio | grep -q apk && break
             echo "package not fully registered yet, waiting..."
             sleep 3
           done
-          adb shell pm path tech.capullo.telecloudradio | grep -q apk
-          adb shell am instrument -w -e class tech.capullo.telecloudradio.MainSmokeTest \
+          adb_to 20 shell pm path tech.capullo.telecloudradio | grep -q apk
+          # 900s: the smoke test itself waits up to 30+30+2s per assertion; anything past
+          # ten minutes is a dead guest, not a slow one.
+          adb_to 900 shell am instrument -w -e class tech.capullo.telecloudradio.MainSmokeTest \
             tech.capullo.telecloudradio.test/androidx.test.runner.AndroidJUnitRunner \
             2>&1 | tee "$RUNNER_TEMP/instrument.log"
           # A missing OK marker means adb died mid-run or the run never finished; failure
