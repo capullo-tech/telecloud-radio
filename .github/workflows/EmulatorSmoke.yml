@@ -290,7 +290,11 @@ jobs:
             echo "::error::could not install $1 after 10 attempts"
             return 1
           }
-          adb logcat -c
+          # Best-effort: right after boot, logd on the older images can answer "failed to
+          # clear the 'main' log" with a non-zero exit - that killed the API 26 leg before
+          # any install ran. This is diagnostic hygiene, not a gate; the gates are the OK /
+          # failure markers below.
+          adb logcat -c || true
           install_with_retry apks/debug/app-debug.apk
           install_with_retry apks/androidTest/debug/app-debug-androidTest.apk
           for _ in 1 2 3 4 5 6 7 8 9 10; do
