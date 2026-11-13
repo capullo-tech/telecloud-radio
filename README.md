@@ -1,9 +1,10 @@
 # Telecloud Radio
 
 An Android audio player for Telegram: browse a chat's audio messages as a
-playlist, play them with gapless prefetch, and broadcast to any number of
-[Snapcast](https://github.com/badaix/snapcast) clients for synchronized
-multi-device listening - with a built-in web player for browser clients.
+playlist, play them with gapless prefetch (or an optional crossfade), and
+broadcast to any number of [Snapcast](https://github.com/badaix/snapcast)
+clients for synchronized multi-device listening - with a built-in web player
+for browser clients.
 
 ## Screenshots
 

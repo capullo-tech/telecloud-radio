@@ -29,6 +29,7 @@ import tech.capullo.audio.snapcast.ServerGetStatusResponse
 import tech.capullo.audio.snapcast.ServerOnUpdate
 import tech.capullo.audio.snapcast.ServerStatusResult
 import tech.capullo.audio.snapcast.SnapcastControlClient
+import tech.capullo.audio.snapcast.SnapcastRemoteArt
 import tech.capullo.audio.snapcast.SnapclientProcess
 import tech.capullo.audio.snapcast.SnapcontrolPlugin
 import tech.capullo.audio.snapcast.SnapserverDiscoveryManager
@@ -73,7 +74,7 @@ class SnapcastManager @Inject constructor(
         val listenState: SnapclientProcess.ConnectionState = SnapclientProcess.ConnectionState.STARTING,
         /** Now-playing pushed by the remote stream while listening in. */
         val remoteProps: StreamPlayerProperties? = null,
-        /** Decoded artData of the remote track. */
+        /** Art of the remote track: the embedded thumbnail at first, then the full image once fetched. */
         val remoteArt: ByteArray? = null,
         /** Stream id of the active group (needed for Stream.Control). */
         val streamId: String = "",
@@ -201,7 +202,7 @@ class SnapcastManager @Inject constructor(
      */
     fun prepareBroadcast(): String {
         stopBroadcast()
-        // OS-assigned ports so multiple capullo apps coexist and the ports aren't a fixed guess.
+        // A random consecutive port block so multiple capullo apps coexist and the ports aren't a fixed guess.
         // The resolved trio is read back off snapserver.ports to wire the snapclient / NSD / control.
         return SnapserverProcess(
             context,
@@ -341,6 +342,13 @@ class SnapcastManager @Inject constructor(
 
     // --- Listen-in side ---
 
+    /** HTTP port of the snapserver we listen to: its art (`artUrl` paths) is fetched from there. */
+    @Volatile private var listenHttpPort = SnapcastPorts.HTTP
+
+    /** Resolved full-size art URL of the remote track, shown or being fetched; null when none. */
+    @Volatile private var remoteArtUrl: String? = null
+    private var remoteArtJob: Job? = null
+
     fun connectListen(
         host: String,
         port: Int = SnapcastPorts.STREAM,
@@ -350,6 +358,8 @@ class SnapcastManager @Inject constructor(
         stopBroadcast()
         stopLocalSnapclient()
         stopControl()
+        clearRemoteArt()
+        listenHttpPort = httpPort
         _state.update {
             it.copy(
                 listenHost = host,
@@ -370,6 +380,7 @@ class SnapcastManager @Inject constructor(
         Log.d(TAG, "Listen-in disconnect")
         stopLocalSnapclient()
         stopControl()
+        clearRemoteArt()
         _state.update {
             it.copy(
                 listenHost = "",
@@ -703,16 +714,37 @@ class SnapcastManager @Inject constructor(
     }
 
     private fun applyRemoteProps(props: StreamPlayerProperties) {
-        val art = props.metadata?.artData?.let { ad ->
-            runCatching { Base64.decode(ad.data, Base64.DEFAULT) }.getOrNull()
+        val meta = props.metadata
+        if (meta == null) {
+            // Keep previous art when a play/pause-only event carries no metadata
+            _state.update { it.copy(remoteProps = props) }
+            return
         }
-        _state.update {
-            it.copy(
-                remoteProps = props,
-                // Keep previous art when a play/pause-only event carries no metadata
-                remoteArt = if (props.metadata != null) art else it.remoteArt,
-            )
+        val st = _state.value
+        // Only a listener fetches: while broadcasting these are our own properties echoed back.
+        val url = if (st.isListening) SnapcastRemoteArt.resolveUrl(meta.artUrl, st.listenHost, listenHttpPort) else null
+        if (url != null && url == remoteArtUrl) {
+            // Same picture (every transport flip re-sends the metadata): keep what is shown or coming.
+            _state.update { it.copy(remoteProps = props) }
+            return
         }
+        remoteArtJob?.cancel()
+        remoteArtUrl = url
+        // The embedded thumbnail shows at once; the full image replaces it when the download lands.
+        val thumb = meta.artData?.let { ad -> runCatching { Base64.decode(ad.data, Base64.DEFAULT) }.getOrNull() }
+        _state.update { it.copy(remoteProps = props, remoteArt = thumb) }
+        if (url == null) return
+        remoteArtJob = scope.launch {
+            val full = SnapcastRemoteArt.download(url) ?: return@launch
+            // Checked inside the update so a newer track's art, set concurrently, is never overwritten.
+            _state.update { if (remoteArtUrl == url) it.copy(remoteArt = full) else it }
+        }
+    }
+
+    private fun clearRemoteArt() {
+        remoteArtJob?.cancel()
+        remoteArtJob = null
+        remoteArtUrl = null
     }
 
     // Give this device's local snapclient an initial channel tag ([S]/[L]/[R])

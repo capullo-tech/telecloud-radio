@@ -6,6 +6,7 @@ import kotlinx.coroutines.flow.SharedFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.flow.asStateFlow
+import tech.capullo.telecloudradio.data.TrackKey
 import tech.capullo.telecloudradio.data.db.MediaMessageEntity
 import javax.inject.Inject
 import javax.inject.Singleton
@@ -34,6 +35,13 @@ class ActiveTrackRepository @Inject constructor() {
     private val _messages = MutableSharedFlow<String>(extraBufferCapacity = 1)
     val messages: SharedFlow<String> = _messages.asSharedFlow()
 
+    // PlaybackService's crossfade handing the broadcast over to the track PlayerViewModel staged
+    // next. The handoff swaps the session's player, which reaches the MediaController as a
+    // transition with no reason of its own, so PlayerViewModel takes this as the signal and syncs
+    // as for a gapless advance once its controller shows that track.
+    private val _crossfadeHandoffs = MutableSharedFlow<TrackKey>(extraBufferCapacity = 1)
+    val crossfadeHandoffs: SharedFlow<TrackKey> = _crossfadeHandoffs.asSharedFlow()
+
     fun set(track: MediaMessageEntity, chatId: Long, chatTitle: String) {
         _activePlayback.value = ActivePlayback(track, chatId, chatTitle)
     }
@@ -58,6 +66,10 @@ class ActiveTrackRepository @Inject constructor() {
 
     fun emitMessage(message: String) {
         _messages.tryEmit(message)
+    }
+
+    fun emitCrossfadeHandoff(target: TrackKey) {
+        _crossfadeHandoffs.tryEmit(target)
     }
 
     fun clear() {
