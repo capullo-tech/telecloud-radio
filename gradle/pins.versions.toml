@@ -6,8 +6,9 @@
 [versions]
 # capullo-audio - immutable jitpack commit; engine + capullo-audio-ui share it.
 capulloAudio = "1c866cf801a902c112be88310a229da12b9dde70"
-# capullo-source-telegram - brings lib-tdlib-android transitively.
-capulloSourceTelegram = "eb89e4d9e3848bad6eb3340f7db8ab2f9107c90d"
+# capullo-source-telegram - brings lib-tdlib-android transitively (3fee328 build:
+# un-truncated + api-aligned natives; see capullo-tech/lib-tdlib-android#1).
+capulloSourceTelegram = "402f6783e1c942936cef135400e28096a7640041"
 # NOTE: no lib-snapcast-android pin here. TC gets the native snapcast .so binaries
 # transitively via capullo-audio (which owns the libSnapcast pin). A direct pin used to live here and
 # had to be kept in lockstep with capullo-audio's - a mismatch let Gradle pick the lexically-higher
