@@ -1,0 +1,376 @@
+name: Emulator Smoke
+
+on:
+  workflow_dispatch:
+  pull_request:
+  push:
+    branches:
+      - main
+
+permissions:
+  contents: read
+
+# Fifteen emulator legs per push is expensive; a newer run on the same ref supersedes it (same
+# pattern Release.yml carries, for the same one-artifact-invariant reason).
+concurrency:
+  group: emulator-smoke-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    name: Build smoke APKs
+    runs-on: ubuntu-latest
+    outputs:
+      # SDK 37's resolved api-level string ("37.x") for the matrix leg - see the resolve step.
+      api37: ${{ steps.catalog.outputs.api37 }}
+    steps:
+      - name: Checkout project sources
+        uses: actions/checkout@v4
+      - name: Setup Java
+        uses: actions/setup-java@v4
+        with:
+          java-version: '17'
+          distribution: 'temurin'
+      - name: Setup Gradle
+        uses: gradle/actions/setup-gradle@v4
+      # Debug variant, not release: the smoke matrix tests the app, not the signing path - and
+      # release needs the RELEASE_* secrets, which fork PRs don't have (Build.yml's lesson).
+      - name: Build app + instrumentation APKs
+        run: ./gradlew :app:assembleDebug :app:assembleDebugAndroidTest
+      - name: Upload smoke APKs
+        uses: actions/upload-artifact@v4
+        with:
+          name: smoke-apks-${{ github.sha }}
+          path: |
+            app/build/outputs/apk/debug/app-debug.apk
+            app/build/outputs/apk/androidTest/debug/app-debug-androidTest.apk
+          if-no-files-found: error
+      # Runs once per workflow, not once per leg. Two jobs in one: (1) dump the image catalog
+      # into the log and summary - "which system images existed when this ran" - so a leg
+      # failing on a missing image is diagnosed in one glance; (2) resolve SDK 37's platform
+      # minor for the matrix (below). NOTE the absolute sdkmanager path: cmdline-tools is NOT
+      # on PATH for plain steps, and a catalog dump once no-oped silently behind 2>/dev/null
+      # that way.
+      - name: Dump system-image catalog, resolve SDK 37 minor
+        id: catalog
+        run: |
+          SDKMGR="${ANDROID_HOME:-/usr/local/lib/android/sdk}/cmdline-tools/latest/bin/sdkmanager"
+          IMAGES=$("$SDKMGR" --list 2>/dev/null \
+            | grep -E 'system-images;android-(2[3-9]|3[0-9])' | sort -u || true)
+          echo "$IMAGES"
+          {
+            echo '### Available system images (stable channel)'
+            echo '```'
+            echo "$IMAGES"
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+          # platforms;android-37 does not exist: 37 ships as versioned minors, and only 37.0
+          # carries a plain google_apis x86_64 image (37.1/37.2 ship ps16k variants only - an
+          # inexact grep resolved 37.2 on the first try and the leg died on a missing image).
+          # Exact-target match keeps this honest as Google re-minors; the probe fallback tries
+          # the same exact packages, newest minor first.
+          IMGS37=$(printf '%s\n' "$IMAGES" | grep -E 'system-images;android-37[.0-9]*;google_apis;x86_64' || true)
+          API37=$(printf '%s\n' "$IMGS37" | grep -oE 'android-37[.0-9]*' | sort -uV | tail -1 \
+            | sed -E 's/^android-//')
+          if [ -z "$API37" ]; then
+            echo '::warning::no 37-family image in catalog listing; probing installs'
+            for cand in 37.2 37.1 37.0; do
+              if yes | "$SDKMGR" --install "system-images;android-$cand;google_apis;x86_64" \
+                >/dev/null 2>&1; then API37=$cand; break; fi
+            done
+          fi
+          echo "Resolved SDK 37 api-level string: ${API37:-<none>}"
+          echo "api37=$API37" >> "$GITHUB_OUTPUT"
+
+  smoke:
+    name: Smoke API ${{ matrix.api-level }}
+    needs: build
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    strategy:
+      # One leg's emulator crashing says nothing about the other fourteen API levels.
+      fail-fast: false
+      matrix:
+        # minSdk (23) through 37, one leg each. Quoted: the 37 leg's resolved string
+        # substitutes through the same env.
+        api-level: ['23', '24', '25', '26', '27', '28', '29', '30', '31', '32', '33', '34', '35', '36', '37']
+        include:
+          # The catalog has NO android-27 google_apis x86_64 image (only 32-bit x86 and
+          # arm64-v8a remain for 8.1). The 32-bit x86 image runs natively on the x86_64 host
+          # (long-mode compat), and the app packages 32-bit x86 natives for exactly this floor:
+          # libtdjni (32-bit built at API 16) + the snapcast/ffmpeg natives ship 4 ABIs. If a
+          # dependency ever drops x86, this leg's install step is where that regression lands -
+          # which is the matrix doing its job, not a CI gap.
+          - api-level: '27'
+            abi: 'x86'
+          # The 37.0 google_apis image is unusable for CI on this emulator/swiftshader stack:
+          # surfaceflinger SIGABRTs in its RegionSampling thread, cascade-killing SystemUI and
+          # the launcher (DEAD_OBJECT loops), am start's resolver and the accessibility layer -
+          # nothing a gate can wait out. The aosp_atd (Automated Test Device) image - Google's
+          # stripped-down, instrumentation-first system, no launcher/Monet sampling - is the
+          # documented home for exactly this use. It also gets the runner's full 4 vCPU / 4GB:
+          # its first boot on 2 vCPU / 2GB never came up past "device offline".
+          - api-level: '37'
+            target: 'aosp_atd'
+            cores: '4'
+            ram-size: '4096M'
+            boot-timeout: '1800'
+    env:
+      # For 37, the build leg's resolved platform minor ("37.x") replaces the literal: the
+      # catalog has no android-37, only minor-versioned 37.0/37.1/... platforms and images.
+      # ABI is x86_64 everywhere except the 27 leg (see its include entry above).
+      ANDROID_API: ${{ matrix.api-level == '37' && needs.build.outputs.api37 || matrix.api-level }}
+      ANDROID_TARGET: ${{ matrix.target || 'google_apis' }}
+      ANDROID_ABI: ${{ matrix.abi || 'x86_64' }}
+      EMU_CORES: ${{ matrix.cores || '2' }}
+      EMU_RAM: ${{ matrix.ram-size || '2048M' }}
+      BOOT_TIMEOUT: ${{ matrix.boot-timeout || '900' }}
+    steps:
+      # Emulator orchestration is manual on purpose, not reactivecircus/android-emulator-runner:
+      # the action runs its post-boot "input keyevent 82" unlock with no retry and treats its
+      # failure as fatal (a just-booted 37.0 guest's input service returns Broken pipe), it
+      # splits script: into single lines each run as its own sh -c, and it hides exactly the
+      # boot lifecycle a ten-leg matrix needs to see. ~30 lines here own all of that.
+      - name: Put Android SDK tools on PATH
+        run: |
+          SDK="${ANDROID_HOME:-/usr/local/lib/android/sdk}"
+          echo "$SDK/platform-tools" >> "$GITHUB_PATH"
+          echo "$SDK/emulator" >> "$GITHUB_PATH"
+          echo "$SDK/cmdline-tools/latest/bin" >> "$GITHUB_PATH"
+          echo "ANDROID_SDK_ROOT=$SDK" >> "$GITHUB_ENV"
+          # avdmanager only reliably lands AVDs under an explicitly-set ANDROID_AVD_HOME that
+          # already exists (the action creates it for the same reason); the emulator launch
+          # needs the variable too.
+          echo "ANDROID_AVD_HOME=$HOME/.android/avd" >> "$GITHUB_ENV"
+          mkdir -p "$HOME/.android/avd"
+      - name: Download smoke APKs
+        uses: actions/download-artifact@v4
+        with:
+          name: smoke-apks-${{ github.sha }}
+          path: apks
+      # Nested virtualization on ubuntu-latest needs the KVM node writable by the runner user -
+      # the android-emulator-runner project's documented enabling step.
+      - name: Enable KVM
+        run: |
+          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' \
+            | sudo tee /etc/udev/rules.d/99-kvm4all.rules
+          sudo udevadm control --reload-rules
+          sudo udevadm trigger --name-match=kvm
+      - name: Install system image, create AVD
+        run: |
+          set -eu
+          yes | sdkmanager --licenses > /dev/null || true
+          # "emulator" explicitly: installing pre-24 system images drags dependency
+          # resolution that leaves the runner's emulator package without metadata, and
+          # avdmanager then refuses with "emulator package must be installed!" (seen on
+          # the API 23-27 legs; harmless where the image installs clean).
+          sdkmanager --install "emulator" "system-images;android-$ANDROID_API;$ANDROID_TARGET;$ANDROID_ABI" > /dev/null
+          echo no | avdmanager create avd --force -n smoke \
+            --package "system-images;android-$ANDROID_API;$ANDROID_TARGET;$ANDROID_ABI"
+          # Visible confirmation - a create that silently lands nowhere dies here, not three
+          # steps later in a confusing boot failure.
+          avdmanager list avd | grep -A2 'Name: smoke'
+          printf 'hw.cpu.ncore=%s\nhw.ramSize=%s\ndisk.dataPartition.size=8G\n' "$EMU_CORES" "$EMU_RAM" \
+            >> "${ANDROID_AVD_HOME:-$HOME/.android/avd}/smoke.avd/config.ini"
+      - name: Boot emulator
+        timeout-minutes: 35
+        run: |
+          set -eu
+          nohup emulator -avd smoke -port 5554 -no-window -gpu swiftshader_indirect -noaudio \
+            -no-boot-anim -no-snapshot -no-metrics -camera-back none -camera-front none \
+            -dns-server 8.8.8.8 \
+            > /tmp/emulator.log 2>&1 &
+          deadline=$(( $(date +%s) + BOOT_TIMEOUT ))
+          # adb_to: every guest probe gets a hard ceiling - old images (23-27) can wedge
+          # adbd mid-boot (the API 23 leg once hung the install step for 40+ minutes on a
+          # bare adb call); a timeout converts that into the loop's normal retry path.
+          adb_to() { timeout "$1" adb "${@:2}"; }
+          until [ "$(adb_to 20 shell getprop sys.boot_completed 2>/dev/null | tr -d '\r')" = "1" ]; do
+            if [ "$(date +%s)" -ge "$deadline" ]; then
+              echo "::error::emulator did not boot within ${BOOT_TIMEOUT}s - emulator log tail:"
+              tail -50 /tmp/emulator.log
+              exit 1
+            fi
+            sleep 5
+          done
+          echo "Emulator booted (android-$ANDROID_API $ANDROID_ABI, $EMU_CORES cores / $EMU_RAM)."
+          # User-unlock gate, FIRST (the launcher cannot settle under a locked user): FBE
+          # images boot through a locked-user (direct boot) phase; until the
+          # credential-encrypted storage is prepared, activities of apps that are not
+          # direct-boot-aware cannot start at all (am start Error type 3 against an activity
+          # dumpsys shows registered), the launcher crash-loops, and - the trap run 15 hit -
+          # RUNNING_UNLOCKED alone is premature: prepareUserData/reconcileAppsData still runs
+          # for ~20s after it and SIGKILLs app processes that started during the locked phase,
+          # taking the instrumentation down with them ("System has crashed"). So: wait for
+          # RUNNING_UNLOCKED, nudging the no-credential keyguard with dismiss-keyguard every
+          # round (the unlock trigger on emulators), THEN also wait for
+          # sys.user.0.ce_available=true before anything else touches the guest.
+          unlocked=0
+          for _ in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20 21 22 23 24 25 26 27 28 29 30 31 32 33 34 35 36; do
+            if adb_to 20 shell dumpsys user 2>/dev/null | tr -d '\r' | grep -q RUNNING_UNLOCKED; then
+              unlocked=1
+              break
+            fi
+            adb_to 15 shell wm dismiss-keyguard >/dev/null 2>&1 || true
+            sleep 5
+          done
+          if [ "$unlocked" = "1" ]; then
+            echo "User 0 state RUNNING_UNLOCKED; waiting for CE storage."
+          else
+            echo "::warning::user-unlock marker never appeared (3 min); proceeding anyway"
+          fi
+          ce_ok=0
+          for _ in 1 2 3 4 5 6 7 8 9 10 11 12; do
+            if [ "$(adb_to 20 shell getprop sys.user.0.ce_available 2>/dev/null | tr -d '\r')" = "true" ]; then
+              ce_ok=1
+              break
+            fi
+            sleep 5
+          done
+          if [ "$ce_ok" = "1" ]; then
+            echo "User 0 CE storage available."
+          else
+            echo "::warning::sys.user.0.ce_available never became true; proceeding anyway"
+          fi
+          sleep 20
+          # Launcher stability gate, now meaningful (post-unlock): any process still dying at
+          # this point would still tear the UiAutomation connection down mid-test ("System has
+          # crashed"). Wait until the launcher pid holds steady across checks - an empty pid
+          # three checks in a row means no launcher at all (aosp_atd), stable by definition.
+          last=""; stable=0; empty=0
+          for _ in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20 21 22 23 24; do
+            cur=$(adb_to 20 shell pidof com.google.android.apps.nexuslauncher 2>/dev/null | tr -d '\r' || true)
+            if [ -z "$cur" ]; then
+              empty=$((empty+1))
+              if [ "$empty" -ge 3 ]; then break; fi
+            elif [ "$cur" = "$last" ]; then
+              stable=$((stable+1))
+              if [ "$stable" -ge 3 ]; then break; fi
+            else
+              stable=0
+            fi
+            last="$cur"
+            sleep 5
+          done
+          echo "Launcher settled (pid $last, stability $stable/3, empty $empty)."
+          # Post-boot settle, best-effort on purpose: a just-booted guest can refuse the input
+          # service for a few seconds (the unlock keyevent is what killed the action-based
+          # runs) and none of it is required for the smoke test to be meaningful.
+          for _ in 1 2 3 4 5; do adb_to 15 shell input keyevent 82 >/dev/null 2>&1 && break; sleep 3; done
+          adb_to 15 shell wm dismiss-keyguard >/dev/null 2>&1 || true
+          # Private DNS off, on every leg: TDLib underneath the auth screen must resolve the
+          # Telegram endpoints, and on the API 28-32 images DNS-over-TLS to the
+          # runner-provided resolver is refused outright (netd logs DnsTlsSocket errno=111)
+          # with no usable fallback - DNS dies and TDLib's connectivity detection with it.
+          # Harmless where DNS already works (and a no-op below API 28).
+          adb_to 15 shell settings put global private_dns_mode off >/dev/null 2>&1 || true
+          # Connectivity probe into the log: distinguishes "guest cannot reach Telegram at
+          # all" from "the app cannot start TDLib" when an auth leg goes red.
+          echo 'Network probe (ping www.telegram.org):'
+          adb_to 30 shell ping -c 1 www.telegram.org 2>&1 | head -2 || true
+          adb_to 15 shell settings put global window_animation_scale 0.0 >/dev/null 2>&1 || true
+          adb_to 15 shell settings put global transition_animation_scale 0.0 >/dev/null 2>&1 || true
+          adb_to 15 shell settings put global animator_duration_scale 0.0 >/dev/null 2>&1 || true
+      - name: Install APKs, run the launch smoke test
+        run: |
+          set -euo pipefail
+          # -g pre-grants POST_NOTIFICATIONS on API 33+, so the first frame is the app and not
+          # the system permission sheet (the smoke assertions don't need it, but the failure
+          # screenshots benefit).
+          #
+          # Everything below is defensive around the post-boot settling window: a fresh 37.0
+          # guest's package service answers boot_completed but Broken-pipes the first install,
+          # and that poisoned half-install outlives the retry - instrumentation then starts
+          # against a package whose APK binding reads "inode == 0" and every activity lookup
+          # fails. So: wait for the service to actually answer, retry the installs anyway, and
+          # do not instrument until the package genuinely resolves.
+          # Every adb call below is wrapped in `timeout`: on the old images (23-27) a wedged
+          # adbd after boot blocks the bare calls FOREVER - the API 23 leg sat 40+ minutes
+          # in this step on an unbounded `adb install` before the job cap killed it. The
+          # wrappers turn a hang into a retry-able failure.
+          adb_to() { timeout "$1" adb "${@:2}"; }
+          for _ in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15; do
+            adb_to 20 shell pm path android >/dev/null 2>&1 && break
+            echo "package service not answering yet, waiting..."
+            sleep 2
+          done
+          install_with_retry() {
+            for _ in 1 2 3 4 5 6 7 8 9 10; do
+              if adb_to 300 install -r -g "$1"; then return 0; fi
+              echo "install of $1 refused (service settling), retrying in 5s..."
+              sleep 5
+            done
+            echo "::error::could not install $1 after 10 attempts"
+            return 1
+          }
+          # Best-effort: right after boot, logd on the older images can answer "failed to
+          # clear the 'main' log" with a non-zero exit - that killed the API 26 leg before
+          # any install ran. This is diagnostic hygiene, not a gate; the gates are the OK /
+          # failure markers below.
+          adb_to 15 logcat -c || true
+          install_with_retry apks/debug/app-debug.apk
+          install_with_retry apks/androidTest/debug/app-debug-androidTest.apk
+          for _ in 1 2 3 4 5 6 7 8 9 10; do
+            adb_to 20 shell pm path tech.capullo.telecloudradio | grep -q apk && break
+            echo "package not fully registered yet, waiting..."
+            sleep 3
+          done
+          adb_to 20 shell pm path tech.capullo.telecloudradio | grep -q apk
+          # 900s: the smoke test itself waits up to 30+30+2s per assertion; anything past
+          # ten minutes is a dead guest, not a slow one.
+          # tr -d CR first: old images' adbd emits CRLF, and the OK gate below is line-anchored.
+          adb_to 900 shell am instrument -w -e class tech.capullo.telecloudradio.MainSmokeTest \
+            tech.capullo.telecloudradio.test/androidx.test.runner.AndroidJUnitRunner \
+            2>&1 | tr -d '\r' | tee "$RUNNER_TEMP/instrument.log"
+          # A missing OK marker means adb died mid-run or the run never finished; failure
+          # markers cover the cases where am instrument exits 0 despite failures. Explicit
+          # if-blocks, not bare grep lines: under set -e a trailing "! grep" result is masked
+          # by the commands after it.
+          if ! grep -qE '^OK \([0-9]+ tests?\)$' "$RUNNER_TEMP/instrument.log"; then
+            echo "::error::smoke test did not complete on API ${{ matrix.api-level }} (transcript above)"
+            exit 1
+          fi
+          if grep -qE 'FAILURES!!!|INSTRUMENTATION_FAILED|Process crashed|Test run failed' "$RUNNER_TEMP/instrument.log"; then
+            echo "::error::smoke instrumentation failed on API ${{ matrix.api-level }} (transcript above)"
+            exit 1
+          fi
+      # The proof the smoke test passed, from every leg: screenshots taken IN-TEST (the
+      # instrumentation finishes the activity when the test method ends, so a post-hoc
+      # capture would only show the launcher). One artifact per leg, green or red - the
+      # 'did the main page really load content' question is answered by opening a file, not
+      # re-running a matrix. 14-day retention: public repos get artifact storage free, but
+      # ten artifacts per push should not accumulate for the default 90 days either.
+      - name: Collect in-test smoke evidence
+        if: always()
+        run: |
+          mkdir -p evidence
+          timeout 30 adb pull /sdcard/smoke-home.png evidence/ >/dev/null 2>&1 || true
+          timeout 30 adb pull /sdcard/smoke-content.png evidence/ >/dev/null 2>&1 || true
+      - name: Upload smoke evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: smoke-evidence-api${{ matrix.api-level }}-${{ github.run_id }}
+          path: evidence/
+          if-no-files-found: ignore
+          retention-days: 14
+      - name: Capture failure evidence (logcat, dumpsys, view dump)
+        # Steps default to success()-only; failure evidence must run exactly when things
+        # broke. timeout on every adb: with the emulator dead, adb blocks indefinitely on
+        # device wait.
+        if: failure()
+        run: |
+          mkdir -p evidence
+          timeout 30 adb shell uiautomator dump /sdcard/smoke-dump.xml >/dev/null 2>&1 || true
+          timeout 30 adb pull /sdcard/smoke-dump.xml evidence/ >/dev/null 2>&1 || true
+          timeout 30 adb shell dumpsys package tech.capullo.telecloudradio > evidence/dumpsys-package.txt 2>/dev/null || true
+          timeout 30 adb shell dumpsys user > evidence/dumpsys-user.txt 2>/dev/null || true
+          timeout 30 adb logcat -d > evidence/logcat.txt 2>/dev/null || true
+          cp /tmp/emulator.log evidence/ 2>/dev/null || true
+      - name: Upload failure evidence
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: smoke-failure-api${{ matrix.api-level }}-${{ github.run_id }}
+          path: evidence/
+          if-no-files-found: ignore
