@@ -10,6 +10,7 @@ import android.os.Build
 import android.os.Bundle
 import android.os.Environment
 import android.provider.MediaStore
+import androidx.core.content.ContextCompat
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import androidx.media3.common.MediaItem
@@ -186,7 +187,7 @@ class PlayerViewModel @Inject constructor(
                 val future = MediaController.Builder(context, token).buildAsync()
                 future.addListener({
                     runCatching { cont.resume(future.get()) }
-                }, context.mainExecutor)
+                }, ContextCompat.getMainExecutor(context))
                 cont.invokeOnCancellation { future.cancel(true) }
             }
             if (!controllerPreparedForCurrentChat) controller?.pause()

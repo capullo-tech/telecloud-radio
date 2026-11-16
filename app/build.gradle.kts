@@ -231,6 +231,10 @@ dependencies {
     testImplementation(pins.mockk)
     androidTestImplementation(libs.androidx.junit)
     androidTestImplementation(libs.androidx.espresso.core)
+    // UiAutomator for the device-level smoke test (MainSmokeTest / EmulatorSmoke CI): polls the
+    // window hierarchy directly, unlike a Compose rule whose idle sync never settles under the
+    // auth screen's indefinite spinners.
+    androidTestImplementation(pins.androidx.test.uiautomator)
     androidTestImplementation(platform(libs.androidx.compose.bom))
     androidTestImplementation(libs.androidx.compose.ui.test.junit4)
     debugImplementation(libs.androidx.compose.ui.tooling)

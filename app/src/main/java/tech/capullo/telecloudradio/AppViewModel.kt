@@ -2,6 +2,7 @@ package tech.capullo.telecloudradio
 
 import android.content.ComponentName
 import android.content.Context
+import androidx.core.content.ContextCompat
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import androidx.media3.session.MediaController
@@ -35,7 +36,7 @@ class AppViewModel @Inject constructor(
                 val future = MediaController.Builder(context, token).buildAsync()
                 future.addListener({
                     runCatching { cont.resume(future.get()) }
-                }, context.mainExecutor)
+                }, ContextCompat.getMainExecutor(context))
                 cont.invokeOnCancellation { future.cancel(true) }
             }
         }
