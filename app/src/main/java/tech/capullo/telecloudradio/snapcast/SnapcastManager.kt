@@ -25,6 +25,7 @@ import tech.capullo.audio.snapcast.ClientOnLatencyChanged
 import tech.capullo.audio.snapcast.ClientOnNameChanged
 import tech.capullo.audio.snapcast.ClientOnVolumeChanged
 import tech.capullo.audio.snapcast.Group
+import tech.capullo.audio.snapcast.JoinTarget
 import tech.capullo.audio.snapcast.ServerGetStatusResponse
 import tech.capullo.audio.snapcast.ServerOnUpdate
 import tech.capullo.audio.snapcast.ServerStatusResult
@@ -33,6 +34,7 @@ import tech.capullo.audio.snapcast.SnapcastRemoteArt
 import tech.capullo.audio.snapcast.SnapclientProcess
 import tech.capullo.audio.snapcast.SnapcontrolPlugin
 import tech.capullo.audio.snapcast.SnapserverDiscoveryManager
+import tech.capullo.audio.snapcast.SnapserverListenInfo
 import tech.capullo.audio.snapcast.SnapserverNsdRegistrar
 import tech.capullo.audio.snapcast.SnapserverPorts
 import tech.capullo.audio.snapcast.SnapserverProcess
@@ -54,8 +56,8 @@ import javax.inject.Singleton
  *   remote snapserver → local snapclient; metadata + transport via JSON-RPC.
  *
  * PlaybackService drives the broadcast side (it owns the ExoPlayer and the
- * foreground lifecycle); SnapcastViewModel drives listen-in and the client
- * control UI. Both observe [state].
+ * foreground lifecycle); SnapcastViewModel and a scanned join URL ([join])
+ * drive listen-in and the client control UI. Both observe [state].
  */
 @Singleton
 class SnapcastManager @Inject constructor(
@@ -163,6 +165,7 @@ class SnapcastManager @Inject constructor(
     // takes focus and restarted when focus returns - so two capullo apps don't mix their speaker.
     private var currentSnapclientHost: String? = null
     private var currentSnapclientPort: Int = 0
+    private var currentSnapclientScheme: String = "tcp"
     private var audioFocus: AudioFocusController? = null
 
     // True after releaseSpeaker(): focus abandoned and the local snapclient stopped because playback
@@ -280,7 +283,9 @@ class SnapcastManager @Inject constructor(
             speakerReleased = false
             focus.request()
             val h = currentSnapclientHost
-            if (h != null && snapclientProcess == null) launchSnapclientProcess(h, currentSnapclientPort)
+            if (h != null && snapclientProcess == null) {
+                launchSnapclientProcess(h, currentSnapclientPort, currentSnapclientScheme)
+            }
             Log.d(TAG, "speaker reclaimed on Play")
             return
         }
@@ -349,12 +354,42 @@ class SnapcastManager @Inject constructor(
     @Volatile private var remoteArtUrl: String? = null
     private var remoteArtJob: Job? = null
 
+    /**
+     * A scanned join URL's listen.json fetch, until its [connectListen]. Main thread only, like every
+     * listen-in start/stop: a manual connect or a Leave during the fetch cancels it, so a slow or dead
+     * broadcaster can't start a session the user has already left.
+     */
+    private var joinJob: Job? = null
+
+    /**
+     * Listen in on the station a scanned join URL points at ([tech.capullo.audio.snapcast.JoinUrl]).
+     * On the LAN the broadcaster's `listen.json` is authoritative for its ports (see [JoinEndpoint]);
+     * through the tunnel the snapclient streams over `wss`. Call on the main thread.
+     */
+    fun join(target: JoinTarget) {
+        joinJob?.cancel()
+        joinJob = scope.launch(Dispatchers.Main) {
+            val listenInfo = if (target.secure) null else SnapserverListenInfo.fetch(target.host, target.httpPort)
+            val endpoint = JoinEndpoint.of(target, listenInfo)
+            joinJob = null
+            connectListen(endpoint.host, endpoint.streamPort, endpoint.httpPort, endpoint.scheme)
+        }
+    }
+
+    /**
+     * [scheme] is the snapclient's: `tcp` dials the raw stream [port], `wss` a tunnel's `/stream`
+     * websocket. A `wss` session has no control plane (clients, volume, now-playing):
+     * SnapcastControlClient dials plain `ws://`, which the HTTPS tunnel does not carry.
+     */
     fun connectListen(
         host: String,
         port: Int = SnapcastPorts.STREAM,
         httpPort: Int = SnapcastPorts.HTTP,
+        scheme: String = "tcp",
     ) {
-        Log.d(TAG, "Listen-in → $host:$port (control :$httpPort)")
+        Log.d(TAG, "Listen-in → $scheme://$host:$port (control :$httpPort)")
+        joinJob?.cancel()
+        joinJob = null
         stopBroadcast()
         stopLocalSnapclient()
         stopControl()
@@ -371,11 +406,13 @@ class SnapcastManager @Inject constructor(
                 streamId = "",
             )
         }
-        startLocalSnapclient(host, port)
-        startControl(host, httpPort)
+        startLocalSnapclient(host, port, scheme)
+        if (scheme != "wss") startControl(host, httpPort)
     }
 
     fun disconnectListen() {
+        joinJob?.cancel()
+        joinJob = null
         if (!_state.value.isListening) return
         Log.d(TAG, "Listen-in disconnect")
         stopLocalSnapclient()
@@ -523,11 +560,12 @@ class SnapcastManager @Inject constructor(
 
     // --- Internals ---
 
-    private fun startLocalSnapclient(host: String, port: Int) {
+    private fun startLocalSnapclient(host: String, port: Int, scheme: String = "tcp") {
         destroySnapclientProcess()
         speakerReleased = false
         currentSnapclientHost = host
         currentSnapclientPort = port
+        currentSnapclientScheme = scheme
         localChannelTagSet = false
         // Restore this device's saved spatial role for the new connection: channel seeds the initial
         // tag; volume/latency are re-applied once the client appears (restoreOwnVolLat).
@@ -536,9 +574,9 @@ class SnapcastManager @Inject constructor(
         savedVol = settingsRepository.snapclientVolume
         savedLat = settingsRepository.snapclientLatency
         _state.update { it.copy(snapclientChannel = settingsRepository.snapclientChannel) }
-        launchSnapclientProcess(host, port)
+        launchSnapclientProcess(host, port, scheme)
         // Request audio focus so the foreground app owns the speaker. On loss the local snapclient is
-        // stopped (broadcast continues); on regain it's restarted with the same host/port.
+        // stopped (broadcast continues); on regain it's restarted with the same host/port/scheme.
         val focus = audioFocus ?: AudioFocusController(
             context,
             // Run inline: AudioFocusController already calls these on the main thread, which is
@@ -548,7 +586,9 @@ class SnapcastManager @Inject constructor(
             onPause = { destroySnapclientProcess() },
             onResume = {
                 val h = currentSnapclientHost
-                if (h != null && snapclientProcess == null) launchSnapclientProcess(h, currentSnapclientPort)
+                if (h != null && snapclientProcess == null) {
+                    launchSnapclientProcess(h, currentSnapclientPort, currentSnapclientScheme)
+                }
             },
         ).also { audioFocus = it }
         focus.request()
@@ -573,7 +613,7 @@ class SnapcastManager @Inject constructor(
      * so a supervisor can't be left running for a client that was already replaced; as a backstop
      * it also quits as soon as [snapclientProcess] no longer points at its own client.
      */
-    private fun launchSnapclientProcess(host: String, port: Int) {
+    private fun launchSnapclientProcess(host: String, port: Int, scheme: String) {
         val sc = SnapclientProcess(context).also { snapclientProcess = it }
         snapclientStateJob = scope.launch {
             sc.connectionState.collect { s -> _state.update { it.copy(listenState = s) } }
@@ -585,7 +625,7 @@ class SnapcastManager @Inject constructor(
                 // syncLocalChannelFromName) only update state + the running client's socket, so a
                 // value captured once would relaunch an L/R pair on its pre-change channel.
                 val startedAt = SystemClock.elapsedRealtime()
-                sc.start(host, port, _state.value.snapclientChannel)
+                sc.start(host, port, _state.value.snapclientChannel, scheme = scheme)
                 if (!isActive || snapclientProcess !== sc) break
                 // A run that outlived the max backoff was healthy: the next fault is a fresh one-off
                 // and gets the short delay again rather than inheriting a long session's backoff.

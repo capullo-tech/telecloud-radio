@@ -15,8 +15,11 @@ import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.setValue
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import dagger.hilt.android.AndroidEntryPoint
+import tech.capullo.audio.snapcast.JoinUrl
 import tech.capullo.telecloudradio.data.SettingsRepository
 import tech.capullo.telecloudradio.data.ThemeMode
 import tech.capullo.telecloudradio.data.playlist.ActiveTrackRepository
@@ -52,10 +55,10 @@ class MainActivity : ComponentActivity() {
     //   adb shell am start -n tech.capullo.telecloudradio/.MainActivity --es dbg tunnel --ez on true
     override fun onNewIntent(intent: Intent) {
         super.onNewIntent(intent)
-        // Activity hygiene, not a hook: this is the one line here that runs on release builds too,
-        // so that a later getIntent() sees the intent actually being handled. Nothing in TC reads
-        // getIntent() today.
+        // Activity hygiene: runs on release builds too, so that a later getIntent() sees the intent
+        // actually being handled.
         setIntent(intent)
+        handleJoin(intent)
         if (applicationInfo.flags and ApplicationInfo.FLAG_DEBUGGABLE == 0) return
         val hook = intent.getStringExtra("dbg") ?: return
         // A typo in a hook name, or in a flag name, is otherwise silent: you send the command and
@@ -82,6 +85,24 @@ class MainActivity : ComponentActivity() {
             "calibrate" -> startCalibration()
             else -> Log.w(TAG, "unknown dbg hook: $hook")
         }
+    }
+
+    /**
+     * The host of the station a join URL just joined, until AppNavHost has shown its listen-in screen.
+     */
+    private var joinHost by mutableStateOf<String?>(null)
+
+    /**
+     * Join-by-QR: a capullo "listen" QR encodes a join URL (JoinUrl), which reaches us through the
+     * manifest's VIEW filters, either straight from a camera scan or from the landing page's "Open in
+     * Telecloud Radio" intent link. Anything else is not ours and is ignored.
+     */
+    private fun handleJoin(intent: Intent) {
+        if (intent.action != Intent.ACTION_VIEW) return
+        val target = JoinUrl.parse(intent.dataString ?: return) ?: return
+        Log.i(TAG, "join: $target")
+        snapcastManager.join(target)
+        joinHost = target.host
     }
 
     /**
@@ -156,8 +177,13 @@ class MainActivity : ComponentActivity() {
                 darkTheme = darkTheme,
                 albumArt = activePlayback?.albumArt.takeIf { artTheme },
             ) {
-                AppNavHost()
+                AppNavHost(joinHost = joinHost, onJoinShown = { joinHost = null })
             }
+        }
+        // A recreated activity (savedInstanceState) or a relaunch from Recents carries the intent that
+        // started it: re-handling that would rejoin a station the user may have left long ago.
+        if (savedInstanceState == null && intent.flags and Intent.FLAG_ACTIVITY_LAUNCHED_FROM_HISTORY == 0) {
+            handleJoin(intent)
         }
     }
 
