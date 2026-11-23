@@ -34,6 +34,7 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
@@ -75,10 +76,33 @@ const val LISTEN_IN_CHAT_ID = Long.MIN_VALUE
 // their last row/section clears it. See MiniPlayer / SettingsScreen.
 val MiniPlayerHeight = 72.dp
 
+/**
+ * [joinHost]: a scanned join URL's station (MainActivity), shown as the listen-in screen; [onJoinShown]
+ * clears it once navigated.
+ */
 @Composable
-fun AppNavHost(appViewModel: AppViewModel = hiltViewModel()) {
+fun AppNavHost(
+    joinHost: String? = null,
+    onJoinShown: () -> Unit = {},
+    appViewModel: AppViewModel = hiltViewModel(),
+) {
     val backStack = rememberNavBackStack(AuthRoute)
     val activePlayback by appViewModel.activePlayback.collectAsStateWithLifecycle()
+
+    // A second scan replaces the listen-in screen on top instead of stacking another. On a cold start
+    // this lands on top of AuthRoute, so a phone without a Telegram login can still listen; Leave
+    // returns to the login (or, signed in, on to home).
+    LaunchedEffect(joinHost) {
+        val host = joinHost ?: return@LaunchedEffect
+        val route = PlayerRoute(LISTEN_IN_CHAT_ID, host)
+        val top = backStack.lastOrNull()
+        if (top is PlayerRoute && top.chatId == LISTEN_IN_CHAT_ID) {
+            backStack[backStack.lastIndex] = route
+        } else {
+            backStack.add(route)
+        }
+        onJoinShown()
+    }
 
     Box(Modifier.fillMaxSize()) {
         NavDisplay(
@@ -101,7 +125,8 @@ fun AppNavHost(appViewModel: AppViewModel = hiltViewModel()) {
                         // "two-spinner" bounce). In-place set avoids a momentarily-empty backstack;
                         // the optional add() below still yields a single NavDisplay transition.
                         backStack[0] = GroupSelectorRoute
-                        if (dest != null) {
+                        // Not over a join's listen-in screen, if auth completed while one was pushed.
+                        if (dest != null && backStack.size == 1) {
                             backStack.add(PlayerRoute(dest.first, dest.second))
                         }
                     })

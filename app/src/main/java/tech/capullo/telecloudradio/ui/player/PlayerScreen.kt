@@ -702,7 +702,7 @@ private fun ListenInPlayer(
                 }
                 Text(
                     text = when (state.listenState) {
-                        SnapclientProcess.ConnectionState.CONNECTED -> "Listening in · ${state.listenHost}"
+                        SnapclientProcess.ConnectionState.CONNECTED -> "Listening to ${state.listenHost}"
                         SnapclientProcess.ConnectionState.STARTING -> "Connecting to ${state.listenHost}…"
                         SnapclientProcess.ConnectionState.ERROR -> "Connection error"
                     },
