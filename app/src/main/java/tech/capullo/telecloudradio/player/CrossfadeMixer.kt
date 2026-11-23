@@ -10,6 +10,7 @@ import androidx.media3.common.util.Util
 import androidx.media3.exoplayer.audio.AudioSink
 import androidx.media3.exoplayer.audio.ForwardingAudioSink
 import androidx.media3.exoplayer.audio.TeeAudioProcessor
+import tech.capullo.audio.player.FifoFormat
 import java.nio.ByteBuffer
 import java.nio.ByteOrder
 import java.util.concurrent.Executor
@@ -233,9 +234,8 @@ class InputLeadAudioSink(sink: AudioSink) : ForwardingAudioSink(sink) {
  * sized up front and mixed PCM goes through a reused scratch buffer that only grows if a buffer
  * ever exceeds it.
  *
- * PCM is always 48000 Hz / 16-bit / stereo (LOCKSTEP with SnapserverProcess and the Sonic
- * resampler in every player's chain), so mixing is a plain per-sample sum. A lane fails fast on any
- * other format.
+ * PCM is always [FifoFormat], 48000 Hz / 16-bit / stereo ([FifoFormat.stage] heads every
+ * player's chain), so mixing is a plain per-sample sum. A lane fails fast on any other format.
  */
 @UnstableApi
 class CrossfadeMixer(
@@ -671,9 +671,9 @@ class CrossfadeMixer(
     }
 
     companion object {
-        /** LOCKSTEP with SnapserverProcess and the Sonic resampler in every player's chain. */
-        const val SAMPLE_RATE_HZ = 48_000
-        private const val CHANNELS = 2
+        /** The FIFO's rate; LOCKSTEP lives in [FifoFormat]. */
+        const val SAMPLE_RATE_HZ = FifoFormat.SAMPLE_RATE_HZ
+        private const val CHANNELS = FifoFormat.CHANNEL_COUNT
         private const val BYTES_PER_SAMPLE = 2
         private const val BYTES_PER_FRAME = CHANNELS * BYTES_PER_SAMPLE
 

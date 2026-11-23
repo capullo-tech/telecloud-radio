@@ -17,8 +17,6 @@ import androidx.media3.common.MimeTypes
 import androidx.media3.common.PlaybackException
 import androidx.media3.common.Player
 import androidx.media3.common.Timeline
-import androidx.media3.common.audio.ChannelMixingAudioProcessor
-import androidx.media3.common.audio.ChannelMixingMatrix
 import androidx.media3.common.util.UnstableApi
 import androidx.media3.exoplayer.DefaultRenderersFactory
 import androidx.media3.exoplayer.ExoPlayer
@@ -56,9 +54,8 @@ import tech.capullo.audio.contracts.NowPlaying
 import tech.capullo.audio.contracts.PlaybackController
 import tech.capullo.audio.player.BalanceAudioProcessor
 import tech.capullo.audio.player.FifoAudioBufferSink
-import tech.capullo.audio.player.FixedRateResampler
+import tech.capullo.audio.player.FifoFormat
 import tech.capullo.audio.player.GainAudioProcessor
-import tech.capullo.audio.player.HiResDecimator
 import tech.capullo.audio.snapcast.SnapcastArt
 import tech.capullo.audio.snapcast.SnapcastArtwork
 import tech.capullo.audio.snapcast.firstArtist
@@ -88,7 +85,7 @@ fun MediaItem.trackKey(): TrackKey? {
  * Playback + Snapcast broadcast service.
  *
  * Audio path: ExoPlayer decodes the track; the sink chain forces the PCM to
- * 48000:16:2 ([ChannelMixing → Sonic] ), applies stereo balance and the track's
+ * 48000:16:2 ([FifoFormat.stage]), applies stereo balance and the track's
  * normalization gain, then a tee ([RoutableTee]) copies it into the snapserver FIFO. The
  * AudioTrack output stays (it paces playback and provides the position clock) but player
  * volume is 0 - the audible output on this device is the local snapclient, which is
@@ -425,34 +422,6 @@ class PlaybackService : MediaSessionService() {
         activeTrackRepository.emitCommand(PlaybackCommand.NEXT)
     }
 
-    /**
-     * A matrix that collapses [inputChannelCount] channels to stereo. 5.1 (6ch) uses the standard
-     * ITU-R BS.775 coefficients (FL FR FC LFE BL BR order); other counts route ch0->L, ch1->R and
-     * fold any remaining channels equally into both. Keeps the broadcast in stereo regardless of the
-     * source's channel layout.
-     */
-    private fun stereoDownmixMatrix(inputChannelCount: Int): ChannelMixingMatrix {
-        val out = 2
-        val c = FloatArray(inputChannelCount * out)
-        fun set(inCh: Int, l: Float, r: Float) {
-            c[inCh * out] = l
-            c[inCh * out + 1] = r
-        }
-        if (inputChannelCount == 6) {
-            set(0, 1f, 0f) // FL -> L
-            set(1, 0f, 1f) // FR -> R
-            set(2, 0.707f, 0.707f) // FC -> both
-            set(3, 0f, 0f) // LFE dropped
-            set(4, 0.707f, 0f) // BL -> L
-            set(5, 0f, 0.707f) // BR -> R
-        } else {
-            set(0, 1f, 0f)
-            if (inputChannelCount > 1) set(1, 0f, 1f)
-            for (i in 2 until inputChannelCount) set(i, 0.707f, 0.707f)
-        }
-        return ChannelMixingMatrix(inputChannelCount, out, c)
-    }
-
     // Playback callbacks of whichever deck is primary; completeCrossfade moves it to the new one.
     private val primaryListener = object : Player.Listener {
         override fun onMediaItemTransition(mediaItem: MediaItem?, reason: Int) {
@@ -552,7 +521,7 @@ class PlaybackService : MediaSessionService() {
         }
     }
 
-    // One decode pipeline: [mix → 2ch] → [resample → 48000] → [balance] → [gain] →
+    // One decode pipeline: [FifoFormat.stage → 48000:16:2] → [balance] → [gain] →
     // [tee → silence route] → [tee → FIFO route] → silent AudioTrack. Balance and gain sit before
     // the tees so every listener (local snapclient, LAN clients, web players) hears the same
     // adjusted audio. Builds the primary deck in onCreate and each crossfade's incoming deck.
@@ -618,31 +587,13 @@ class PlaybackService : MediaSessionService() {
                 enableFloatOutput: Boolean,
                 enableAudioTrackPlaybackParams: Boolean,
             ): AudioSink {
-                val mixer = ChannelMixingAudioProcessor().apply {
-                    putChannelMixingMatrix(ChannelMixingMatrix.create(1, 2))
-                    putChannelMixingMatrix(ChannelMixingMatrix.create(2, 2))
-                    // The FFmpeg audio extension (now on the classpath via capullo-audio) decodes
-                    // multichannel FLAC/etc. to its native channel count. Register downmix matrices
-                    // for 3..8 channels so the sink accepts them instead of failing the renderer
-                    // with a MediaCodecAudioRenderer error on e.g. a 5.1 track.
-                    for (channels in 3..8) putChannelMixingMatrix(stereoDownmixMatrix(channels))
-                }
-                // LOCKSTEP with SnapserverProcess.SAMPLE_FORMAT (48000): the FIFO the tee writes is
-                // read by snapserver at that rate, so this resampler must output the same. 48000
-                // lets 48kHz-native FLAC/Opus pass through with no resample; 44.1k content upsamples
-                // once to 48k. FixedRateResampler, not a bare SonicAudioProcessor: the latter forgets
-                // its target on every sink reset (each MP3<->FLAC decoder switch), after which 44.1k
-                // PCM hit the 48k FIFO raw - the resync-storm crackle.
-                val resampler = FixedRateResampler(48000)
+                // FifoFormat owns the FIFO format (LOCKSTEP with SnapserverProcess): any channel
+                // count and rate in, the 48000:16:2 snapserver reads out.
                 val sink = DefaultAudioSink.Builder(context)
                     .setEnableFloatOutput(false) // keep the chain in 16-bit PCM
                     .setAudioProcessorChain(
                         DefaultAudioSink.DefaultAudioProcessorChain(
-                            mixer,
-                            // Anti-alias low-pass + decimation for >48k input (Sonic has none:
-                            // a 192k master's ultrasonic content would fold into the audible band).
-                            HiResDecimator(),
-                            resampler,
+                            *FifoFormat.stage(),
                             balance,
                             gain,
                             silenceRoute,
