@@ -44,10 +44,11 @@
             <!-- Join-by-QR: a capullo "listen" QR's join URL (tech.capullo.audio.snapcast.JoinUrl).
                  Two filters because <data> elements in one filter are cross-multiplied. No
                  android:port: every capullo broadcaster's HTTP port is random. Exact paths, so
-                 /joinfoo is not swallowed. On Android 12+ a camera scan opens the browser (these
-                 hosts can't be App Links-verified); its landing page's "Open in" intent link then
-                 names this package and has to match one of these filters. -->
-            <intent-filter>
+                 /joinfoo is not swallowed. No autoVerify (lint's AppLinkWarning): LAN IPs and
+                 trycloudflare.com can't serve our assetlinks.json, so on Android 12+ a camera scan
+                 opens the browser; its landing page's "Open in" intent link then names this
+                 package and has to match one of these filters. -->
+            <intent-filter tools:ignore="AppLinkWarning">
                 <action android:name="android.intent.action.VIEW" />
                 <category android:name="android.intent.category.DEFAULT" />
                 <category android:name="android.intent.category.BROWSABLE" />
@@ -56,7 +57,7 @@
                 <data android:path="/join/" />
                 <data android:path="/join" />
             </intent-filter>
-            <intent-filter>
+            <intent-filter tools:ignore="AppLinkWarning">
                 <action android:name="android.intent.action.VIEW" />
                 <category android:name="android.intent.category.DEFAULT" />
                 <category android:name="android.intent.category.BROWSABLE" />
