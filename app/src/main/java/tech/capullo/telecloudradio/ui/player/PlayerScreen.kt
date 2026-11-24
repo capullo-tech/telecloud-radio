@@ -208,7 +208,7 @@ fun PlayerScreen(
     val listenIn = chatId == LISTEN_IN_CHAT_ID || snapState.isListening
 
     var showSnapSheet by remember { mutableStateOf(false) }
-    // Public-link (tunnel) state: forwarded to the snapcast sheet's QR dialog ("Public link" segment).
+    // Public-link (tunnel) state: forwarded to the snapcast sheet's QR dialog (Cloudflare chip).
     val tunnelState by snapViewModel.tunnelState.collectAsStateWithLifecycle()
     // Blur the screen content behind the snapcast sheet, matching the web player's
     // `backdrop-filter: blur` overlay (the sheet is a separate window and stays sharp;
@@ -236,6 +236,7 @@ fun PlayerScreen(
             onResetAll = snapViewModel::resetAll,
             httpPort = snapState.broadcastHttpPort,
             publicLink = tunnelState.toPublicLinkState(),
+            onSetPublicLink = (snapViewModel::setPublicLink).takeIf { snapState.isBroadcasting },
             onDismiss = { showSnapSheet = false },
         )
     }

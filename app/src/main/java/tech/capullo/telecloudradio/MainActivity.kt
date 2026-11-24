@@ -20,6 +20,7 @@ import androidx.compose.runtime.setValue
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import dagger.hilt.android.AndroidEntryPoint
 import tech.capullo.audio.snapcast.JoinUrl
+import tech.capullo.audio.tunnel.TunnelManager
 import tech.capullo.telecloudradio.data.SettingsRepository
 import tech.capullo.telecloudradio.data.ThemeMode
 import tech.capullo.telecloudradio.data.playlist.ActiveTrackRepository
@@ -34,6 +35,8 @@ class MainActivity : ComponentActivity() {
     @Inject lateinit var settings: SettingsRepository
 
     @Inject lateinit var snapcastManager: SnapcastManager
+
+    @Inject lateinit var tunnelManager: TunnelManager
 
     // Read only to feed the album-art tint into the theme; playback itself is driven by
     // PlayerViewModel, which owns this repository's writes.
@@ -68,16 +71,16 @@ class MainActivity : ComponentActivity() {
         // as MapCollections$KeySet@183a9, which defeats the point.
         Log.i(TAG, "dbg hook: $hook, extras=${intent.extras?.keySet()?.joinToString()}")
         when (hook) {
-            // Toggle the public-link tunnel without three taps through Settings. PlaybackService
-            // collects settings.tunnelEnabled, so writing it here drives the real wiring - the same
-            // path the switch uses, not a shortcut around it.
+            // Ask for the public-link tunnel without the taps to the QR dialog's Cloudflare chip.
+            // PlaybackService collects tunnelManager.requested, so writing it here drives the real
+            // wiring - the same path the chip uses, not a shortcut around it.
             // `on` defaults to true, matching QuantumCast's identical hook and QC's convention for
             // dbg boolean extras (pcmdump's `probe` too): the default is the thing you usually
             // want, since turning the tunnel ON is what the hook exists for. Defaulting to false
             // was considered and rejected - it only guards against a mistyped command on a build
             // that is debuggable by definition, and it would make a bare `--es dbg tunnel` mean
             // opposite things on two apps that share a rig phone.
-            "tunnel" -> settings.setTunnelEnabled(intent.getBooleanExtra("on", true))
+            "tunnel" -> tunnelManager.setRequested(intent.getBooleanExtra("on", true))
             // Acoustic sync calibration. Needs a live broadcast (no reference PCM otherwise) and
             // RECORD_AUDIO; the permission is requested here when missing, and the calibration
             // starts by itself once it is granted.

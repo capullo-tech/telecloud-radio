@@ -701,13 +701,17 @@ class PlaybackService : MediaSessionService() {
             }
         }
         // Public-link tunnel: runs only while the broadcast stack (and thus the web player's
-        // HTTP port) is live and the setting is on. The tunnel survives listen-in teardown of
-        // the snapclient because isBroadcasting is what matters here.
+        // HTTP port) is live and the user asked for it (the QR dialog's Cloudflare chip). The
+        // tunnel survives listen-in teardown of the snapclient because isBroadcasting is what
+        // matters here.
         serviceScope.launch {
-            combine(settings.tunnelEnabled, snapcastManager.state) { enabled, s ->
-                enabled to s
-            }.collect { (enabled, s) ->
-                if (enabled && s.isBroadcasting) {
+            combine(tunnelManager.requested, snapcastManager.state) { requested, s ->
+                requested to s
+            }.collect { (requested, s) ->
+                // Listening to another station ends this phone's own link, request included: back
+                // from it, the next broadcast opens no link (and posts none) until asked again.
+                if (s.isListening) tunnelManager.setRequested(false)
+                if (requested && s.isBroadcasting) {
                     tunnelManager.start(s.broadcastHttpPort)
                 } else {
                     tunnelManager.stop()
@@ -1156,6 +1160,8 @@ class PlaybackService : MediaSessionService() {
         // other stop() caller - can't do this: TunnelManager is a singleton, and without an
         // explicit stop here cloudflared (and its retained Active(publicUrl)) would outlive the
         // service, orphaned against a snapserver port that stopBroadcast() just tore down.
+        // The request goes with it: the next session opens no public link until asked again.
+        tunnelManager.setRequested(false)
         tunnelManager.stop()
         fifoSink?.close()
         fifoSink = null
