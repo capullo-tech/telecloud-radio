@@ -240,9 +240,6 @@ class SettingsViewModel @Inject constructor(
     val webAutoplay: StateFlow<Boolean> = settings.webAutoplay
     fun setWebAutoplay(value: Boolean) = settings.setWebAutoplay(value)
 
-    val tunnelEnabled: StateFlow<Boolean> = settings.tunnelEnabled
-    fun setTunnelEnabled(value: Boolean) = settings.setTunnelEnabled(value)
-
     val customServerName: StateFlow<String> = settings.customServerName
     fun setCustomServerName(value: String) = settings.setCustomServerName(value)
 }
@@ -408,26 +405,8 @@ fun SettingsScreen(
                 debugPanel = webDebugPanel,
                 onDebugPanelChange = viewModel::setWebDebugPanel,
             )
-            val tunnelEnabled by viewModel.tunnelEnabled.collectAsStateWithLifecycle()
-            Row(
-                modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 8.dp),
-                horizontalArrangement = Arrangement.SpaceBetween,
-                verticalAlignment = androidx.compose.ui.Alignment.CenterVertically,
-            ) {
-                Column(modifier = Modifier.weight(1f)) {
-                    Text("Public link", style = MaterialTheme.typography.bodyMedium)
-                    Text(
-                        "Expose the web player on the internet via a tunnel while broadcasting " +
-                            "(link shows in the player). Anyone with the link can listen and " +
-                            "control; ~1.4 Mbps upload per listener.",
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    )
-                }
-                Switch(checked = tunnelEnabled, onCheckedChange = viewModel::setTunnelEnabled)
-            }
 
-            // Where to post the public link when a broadcast starts. Plain prefs-backed selection
+            // Where to post the public link when it comes up. Plain prefs-backed selection
             // (id + display title), so the row holds a local mutableStateOf and writes through,
             // same as the stepper rows below. The chat list loads lazily on first expand.
             var notifySelection by remember {
@@ -440,7 +419,8 @@ fun SettingsScreen(
             ) {
                 Text("Announce public link in Telegram", style = MaterialTheme.typography.bodyMedium)
                 Text(
-                    "Post the link to the chosen channel or group when a broadcast starts.",
+                    "Post the link to the chosen channel or group when you turn it on " +
+                        "(Cloudflare in the multiroom QR).",
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )

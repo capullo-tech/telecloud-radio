@@ -15,13 +15,16 @@ import javax.inject.Inject
 @HiltViewModel
 class SnapcastViewModel @Inject constructor(
     private val snapcastManager: SnapcastManager,
-    tunnelManager: TunnelManager,
+    private val tunnelManager: TunnelManager,
 ) : ViewModel() {
 
     val state: StateFlow<SnapcastManager.SnapcastState> = snapcastManager.state
     val discoveredServers: StateFlow<List<DiscoveredSnapserver>> = snapcastManager.discovery.discoveredServers
     val tunnelState: StateFlow<TunnelManager.TunnelState> = tunnelManager.state
     val localClientId: String get() = snapcastManager.localClientId
+
+    /** The QR dialog's Cloudflare chip: ask for the public link, or turn it off. */
+    fun setPublicLink(on: Boolean) = tunnelManager.setRequested(on)
 
     fun startDiscovery() = snapcastManager.discovery.startDiscovery()
     fun stopDiscovery() = snapcastManager.discovery.stopDiscovery()
