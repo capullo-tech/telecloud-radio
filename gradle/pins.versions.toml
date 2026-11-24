@@ -5,7 +5,7 @@
 # junit) comes from the shared `libs` catalog.
 [versions]
 # capullo-audio - immutable jitpack commit; engine + capullo-audio-ui share it.
-capulloAudio = "e749bc7875427b0b087935a94981e663d47bc714"
+capulloAudio = "3a9e749f65a6e6443f15db89befc560e2f0c9b96"
 # capullo-source-telegram - brings lib-tdlib-android transitively (3fee328 build:
 # un-truncated + api-aligned natives; see capullo-tech/lib-tdlib-android#1).
 capulloSourceTelegram = "402f6783e1c942936cef135400e28096a7640041"
