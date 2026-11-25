@@ -4,7 +4,6 @@ import android.content.ComponentName
 import android.content.Context
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
-import android.media.MediaMetadataRetriever
 import android.net.Uri
 import android.os.Build
 import android.os.Bundle
@@ -50,6 +49,7 @@ import tech.capullo.telecloudradio.player.AudioMetadataReader
 import tech.capullo.telecloudradio.player.DownloadManager
 import tech.capullo.telecloudradio.player.PlaybackService
 import tech.capullo.telecloudradio.player.trackKey
+import tech.capullo.telecloudradio.player.withRetriever
 import tech.capullo.telecloudradio.util.PerfTrace
 import java.io.File
 import javax.inject.Inject
@@ -1457,7 +1457,7 @@ class PlayerViewModel @Inject constructor(
     }
 
     private fun extractAlbumArt(path: String): ByteArray? = runCatching {
-        MediaMetadataRetriever().use { mmr ->
+        withRetriever { mmr ->
             mmr.setDataSource(path)
             mmr.embeddedPicture
         }

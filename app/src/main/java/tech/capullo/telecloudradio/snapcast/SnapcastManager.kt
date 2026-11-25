@@ -347,8 +347,13 @@ class SnapcastManager @Inject constructor(
 
     // --- Listen-in side ---
 
-    /** HTTP port of the snapserver we listen to: its art (`artUrl` paths) is fetched from there. */
+    /**
+     * HTTP port of the snapserver we listen to, and whether it is reached through its public link
+     * (`https://host`, port 443): its art (`artUrl` paths) is fetched from there.
+     */
     @Volatile private var listenHttpPort = SnapcastPorts.HTTP
+
+    @Volatile private var listenSecure = false
 
     /** Resolved full-size art URL of the remote track, shown or being fetched; null when none. */
     @Volatile private var remoteArtUrl: String? = null
@@ -378,8 +383,8 @@ class SnapcastManager @Inject constructor(
 
     /**
      * [scheme] is the snapclient's: `tcp` dials the raw stream [port], `wss` a tunnel's `/stream`
-     * websocket. A `wss` session has no control plane (clients, volume, now-playing):
-     * SnapcastControlClient dials plain `ws://`, which the HTTPS tunnel does not carry.
+     * websocket. The control plane (clients, volume, now-playing) follows it: JSON-RPC over
+     * `ws://host:httpPort/jsonrpc` on the LAN, `wss://host/jsonrpc` through the tunnel.
      */
     fun connectListen(
         host: String,
@@ -395,6 +400,7 @@ class SnapcastManager @Inject constructor(
         stopControl()
         clearRemoteArt()
         listenHttpPort = httpPort
+        listenSecure = scheme == "wss"
         _state.update {
             it.copy(
                 listenHost = host,
@@ -407,7 +413,7 @@ class SnapcastManager @Inject constructor(
             )
         }
         startLocalSnapclient(host, port, scheme)
-        if (scheme != "wss") startControl(host, httpPort)
+        startControl(host, httpPort, secure = scheme == "wss")
     }
 
     fun disconnectListen() {
@@ -655,9 +661,9 @@ class SnapcastManager @Inject constructor(
         audioFocus?.abandon()
     }
 
-    private fun startControl(host: String, httpPort: Int) {
+    private fun startControl(host: String, httpPort: Int, secure: Boolean = false) {
         stopControl()
-        val client = SnapcastControlClient(host, httpPort).also { controlClient = it }
+        val client = SnapcastControlClient(host, httpPort, secure).also { controlClient = it }
         controlJob = scope.launch {
             client.initialize()
             client.notifications.collect { notif ->
@@ -762,7 +768,7 @@ class SnapcastManager @Inject constructor(
         }
         val st = _state.value
         // Only a listener fetches: while broadcasting these are our own properties echoed back.
-        val url = if (st.isListening) SnapcastRemoteArt.resolveUrl(meta.artUrl, st.listenHost, listenHttpPort) else null
+        val url = if (st.isListening) SnapcastRemoteArt.resolveUrl(meta.artUrl, st.listenHost, listenHttpPort, listenSecure) else null
         if (url != null && url == remoteArtUrl) {
             // Same picture (every transport flip re-sends the metadata): keep what is shown or coming.
             _state.update { it.copy(remoteProps = props) }
