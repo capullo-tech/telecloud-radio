@@ -185,6 +185,29 @@ class SettingsRepository @Inject constructor(@ApplicationContext context: Contex
         _crossfadeSeconds.value = clamped
     }
 
+    // Look lyrics up on LRCLIB, which then learns the artist, title and length of each track that
+    // plays. Off: only lyrics saved by earlier lookups show. Read by LyricsRepository at lookup time.
+    private val _lyricsOnline = MutableStateFlow(prefs.getBoolean("lyrics_online", true))
+    val lyricsOnline: StateFlow<Boolean> = _lyricsOnline.asStateFlow()
+
+    fun setLyricsOnline(value: Boolean) {
+        prefs.edit().putBoolean("lyrics_online", value).apply()
+        _lyricsOnline.value = value
+    }
+
+    // Added to the speakers' automatic delay (LyricsTiming.autoDelayMs) for every song; positive
+    // shows lyric lines later. A flow so an open lyrics view moves as the stepper does.
+    private val _lyricsDelayMs = MutableStateFlow(
+        prefs.getInt("lyrics_delay_ms", 0).coerceIn(LYRICS_DELAY_MS_RANGE),
+    )
+    val lyricsDelayMs: StateFlow<Int> = _lyricsDelayMs.asStateFlow()
+
+    fun setLyricsDelayMs(value: Int) {
+        val clamped = value.coerceIn(LYRICS_DELAY_MS_RANGE)
+        prefs.edit().putInt("lyrics_delay_ms", clamped).apply()
+        _lyricsDelayMs.value = clamped
+    }
+
     // This device's own snapclient spatial role - persisted so a set-once L/R + latency + volume
     // arrangement survives a restart. Defaults = today's behaviour (stereo / 100% / 0ms).
     var snapclientChannel: String
@@ -208,5 +231,8 @@ class SettingsRepository @Inject constructor(@ApplicationContext context: Contex
     companion object {
         const val DEFAULT_CROSSFADE_SECONDS = 6
         val CROSSFADE_SECONDS_RANGE = 2..12
+        const val MAX_LYRICS_DELAY_MS = 2_000
+        const val LYRICS_DELAY_STEP_MS = 100
+        val LYRICS_DELAY_MS_RANGE = -MAX_LYRICS_DELAY_MS..MAX_LYRICS_DELAY_MS
     }
 }

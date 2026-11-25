@@ -17,6 +17,7 @@ import tech.capullo.source.telegram.data.telegram.TelegramClient
 import tech.capullo.source.telegram.data.telegram.TelegramMessage
 import tech.capullo.telecloudradio.data.SettingsRepository
 import tech.capullo.telecloudradio.data.db.AudioAnalysisDao
+import tech.capullo.telecloudradio.data.db.LyricsDao
 import tech.capullo.telecloudradio.data.db.MediaMessageDao
 import tech.capullo.telecloudradio.data.db.MediaMessageEntity
 import tech.capullo.telecloudradio.data.db.TrackGainDao
@@ -30,6 +31,7 @@ class TelegramRepository @Inject constructor(
     private val dao: MediaMessageDao,
     private val analysisDao: AudioAnalysisDao,
     private val trackGainDao: TrackGainDao,
+    private val lyricsDao: LyricsDao,
     private val settings: SettingsRepository,
 ) {
     val authState: StateFlow<AuthState> = client.authState
@@ -76,6 +78,7 @@ class TelegramRepository @Inject constructor(
             analysisDao.get(chatId, row.messageId)?.spectrogramPath?.let { File(it).delete() }
             analysisDao.delete(chatId, row.messageId)
             trackGainDao.delete(chatId, row.messageId)
+            lyricsDao.delete(chatId, row.messageId)
         }
         val removedIds = existing.map { it.messageId }
         dao.deleteByIds(chatId, removedIds)

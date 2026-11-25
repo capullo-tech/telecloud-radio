@@ -75,8 +75,11 @@ import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.SharedFlow
+import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asSharedFlow
+import kotlinx.coroutines.flow.map
+import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import tech.capullo.audio.ui.BalanceControls
@@ -86,10 +89,12 @@ import tech.capullo.telecloudradio.MiniPlayerHeight
 import tech.capullo.telecloudradio.data.SettingsRepository
 import tech.capullo.telecloudradio.data.ThemeMode
 import tech.capullo.telecloudradio.data.db.StationInfo
+import tech.capullo.telecloudradio.data.lyrics.LyricsTiming
 import tech.capullo.telecloudradio.data.playlist.ActiveTrackRepository
 import tech.capullo.telecloudradio.data.playlist.PlaylistRepository
 import tech.capullo.telecloudradio.data.telegram.TelegramRepository
 import tech.capullo.telecloudradio.player.DownloadManager
+import tech.capullo.telecloudradio.snapcast.SnapcastManager
 import tech.capullo.telecloudradio.util.ANNOUNCEMENT_SAMPLE_URL
 import tech.capullo.telecloudradio.util.DEFAULT_ANNOUNCEMENT_TEMPLATE
 import tech.capullo.telecloudradio.util.postFailureMessage
@@ -106,6 +111,7 @@ class SettingsViewModel @Inject constructor(
     private val playlistRepository: PlaylistRepository,
     private val telegramRepository: TelegramRepository,
     private val activeTrackRepository: ActiveTrackRepository,
+    private val snapcastManager: SnapcastManager,
 ) : ViewModel() {
 
     var rebuildDone by mutableStateOf(false)
@@ -233,6 +239,17 @@ class SettingsViewModel @Inject constructor(
 
     val crossfadeSeconds: StateFlow<Int> = settings.crossfadeSeconds
     fun setCrossfadeSeconds(value: Int) = settings.setCrossfadeSeconds(value)
+
+    val lyricsOnline: StateFlow<Boolean> = settings.lyricsOnline
+    fun setLyricsOnline(enabled: Boolean) = settings.setLyricsOnline(enabled)
+
+    val lyricsDelayMs: StateFlow<Int> = settings.lyricsDelayMs
+    fun setLyricsDelayMs(value: Int) = settings.setLyricsDelayMs(value)
+
+    // The speakers' own delay, which the timing setting adds to; shown so the number means something.
+    val lyricsAutoDelayMs: StateFlow<Long> = snapcastManager.state
+        .map { LyricsTiming.autoDelayMs(it.groups, snapcastManager.localClientId) }
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), LyricsTiming.SNAPSERVER_BUFFER_MS)
 
     val webDebugPanel: StateFlow<Boolean> = settings.webDebugPanel
     fun setWebDebugPanel(value: Boolean) = settings.setWebDebugPanel(value)
@@ -393,6 +410,41 @@ fun SettingsScreen(
                     onValueChange = viewModel::setCrossfadeSeconds,
                 )
             }
+
+            HorizontalDivider(modifier = Modifier.padding(vertical = 8.dp))
+
+            SectionHeader("Lyrics")
+            val lyricsOnline by viewModel.lyricsOnline.collectAsStateWithLifecycle()
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 16.dp, vertical = 8.dp),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = androidx.compose.ui.Alignment.CenterVertically,
+            ) {
+                Column(modifier = Modifier.weight(1f)) {
+                    Text("Look up lyrics online", style = MaterialTheme.typography.bodyMedium)
+                    Text(
+                        "Lyrics come from LRCLIB, which receives the artist, title and length of " +
+                            "each track that plays. Off shows only lyrics saved by earlier lookups.",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
+                Switch(checked = lyricsOnline, onCheckedChange = viewModel::setLyricsOnline)
+            }
+            val lyricsDelayMs by viewModel.lyricsDelayMs.collectAsStateWithLifecycle()
+            val lyricsAutoDelayMs by viewModel.lyricsAutoDelayMs.collectAsStateWithLifecycle()
+            IntStepperRow(
+                title = "Lyrics timing",
+                info = "Added to the speakers' $lyricsAutoDelayMs ms delay. More shows lyrics " +
+                    "later. A single song's lyrics can be moved from the lyrics view.",
+                unit = "ms",
+                value = lyricsDelayMs,
+                range = SettingsRepository.LYRICS_DELAY_MS_RANGE,
+                step = SettingsRepository.LYRICS_DELAY_STEP_MS,
+                onValueChange = viewModel::setLyricsDelayMs,
+            )
 
             HorizontalDivider(modifier = Modifier.padding(vertical = 8.dp))
 
@@ -867,7 +919,10 @@ private fun StepperInputDialog(
         text = {
             OutlinedTextField(
                 value = text,
-                onValueChange = { text = it.filter { c -> c.isDigit() }.take(6) },
+                // A leading minus only where the range goes below zero (lyrics timing).
+                onValueChange = {
+                    text = it.filterIndexed { i, c -> c.isDigit() || (c == '-' && i == 0 && range.first < 0) }.take(6)
+                },
                 label = { Text("${range.first}–${range.last}") },
                 singleLine = true,
                 keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),

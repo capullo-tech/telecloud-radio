@@ -6,6 +6,7 @@ import dagger.hilt.android.qualifiers.ApplicationContext
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import org.json.JSONObject
+import tech.capullo.telecloudradio.util.trackNameFromFileName
 import java.io.File
 import java.net.HttpURLConnection
 import java.net.URL
@@ -107,40 +108,13 @@ class AlbumArtFetcher @Inject constructor(@ApplicationContext private val contex
         if (!title.isNullOrBlank()) {
             return (artist?.takeIf { it.isNotBlank() }) to title
         }
-        val base = cleanFilename(fileName) ?: return null
+        val base = trackNameFromFileName(fileName) ?: return null
         val dashSplit = base.split(" - ", limit = 2)
         return if (dashSplit.size == 2 && dashSplit[0].isNotBlank() && dashSplit[1].isNotBlank()) {
             dashSplit[0].trim() to dashSplit[1].trim()
         } else {
             null to base
         }
-    }
-
-    private val audioExtensions = setOf(
-        "mp3", "m4a", "flac", "ogg", "opus", "wav", "aac", "wma", "aiff", "aif", "alac", "ape",
-    )
-    private val usernameRegex = Regex("^[a-zA-Z][a-zA-Z0-9_]{4,31}$")
-    private val youtubeIdRegex = Regex("^[A-Za-z0-9_-]{11}$")
-
-    // "12 - The_Frightnrs - Gotta Find a Way.mimarido11.m4a" → "The Frightnrs - Gotta Find a Way"
-    private fun cleanFilename(fileName: String?): String? {
-        if (fileName.isNullOrBlank()) return null
-        val parts = fileName.split(".").toMutableList()
-        // Strip trailing extension(s), uploader tags and YouTube-id tokens
-        while (parts.size > 1) {
-            val last = parts.last().trim()
-            if (last.lowercase() in audioExtensions ||
-                usernameRegex.matches(last) ||
-                youtubeIdRegex.matches(last)
-            ) {
-                parts.removeAt(parts.size - 1)
-            } else {
-                break
-            }
-        }
-        var base = parts.joinToString(".").replace('_', ' ').trim()
-        base = base.replace(Regex("^\\d{1,3}[\\s.\\-]+"), "").trim() // leading track number
-        return base.takeIf { it.isNotBlank() }
     }
 
     // ---- sources ----
