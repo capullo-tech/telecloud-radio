@@ -374,3 +374,363 @@ jobs:
           name: smoke-failure-api${{ matrix.api-level }}-${{ github.run_id }}
           path: evidence/
           if-no-files-found: ignore
+
+  # One extra leg that runs the app with its arm64-v8a natives. Every matrix leg above runs the
+  # x86_64 libraries, so an ARM-only native mismatch (a TDLib build whose arm64 .so did not match
+  # its Java API shipped green for ten days and crashed every real phone) cannot fail them.
+  #
+  # How, measured on this repo:
+  #  - ubuntu-24.04-arm has no /dev/kvm and no Android SDK (no emulator, no system images), so an
+  #    arm64-v8a AVD there would be pure TCG emulation; ruled out.
+  #  - The x86_64 google_apis image carries Google's ARM translation (ndk_translation) from API 34
+  #    on: ro.product.cpu.abilist is "x86_64,arm64-v8a". On API 33 it is "x86_64" only and the
+  #    translation libraries do not exist. API 36 boots in ~50s on the 2 vCPU runner.
+  #  - "adb install --abi arm64-v8a" makes the package manager pick the arm64 natives
+  #    (primaryCpuAbi=arm64-v8a, lib/arm64 extracted) and the app process runs them through the
+  #    translator (libndk_translation is mapped into it).
+  # The launch smoke test alone proves little here: the app loads none of its JNI libraries on a
+  # cold start (sampled /proc/<pid>/maps during the whole test: no lib/arm64 mapping). So the leg
+  # also loads every arm64 JNI library in the app's own process, with a throwaway instrumentation
+  # APK built below, and executes libsnapserver, a plain ARM executable. libsnapclient and
+  # libcloudflared are not executed: they segfault inside libndk_translation (InterceptSymbol) when
+  # started from the shell on API 34 and 36, whatever the app does.
+  #
+  # A leg that silently ran x86_64 code would be worse than none, so every step asserts the ABI and
+  # prints the evidence: ELF machine of each arm64 library in the APK, the ABI the guest reports,
+  # the ABI the package manager chose (installed lib/arm64 against the APK), and the loaded and
+  # memory-mapped arm64 libraries in the running app process (no x86 library may be mapped).
+  smoke-arm:
+    name: Smoke arm64-v8a (API 36, ARM translation)
+    needs: build
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    env:
+      ANDROID_API: '36'
+      EMU_CORES: '2'
+      EMU_RAM: '2048M'
+      BOOT_TIMEOUT: '900'
+      PKG: tech.capullo.telecloudradio
+    steps:
+      - name: Put Android SDK tools on PATH
+        run: |
+          SDK="${ANDROID_HOME:-/usr/local/lib/android/sdk}"
+          echo "$SDK/platform-tools" >> "$GITHUB_PATH"
+          echo "$SDK/emulator" >> "$GITHUB_PATH"
+          echo "$SDK/cmdline-tools/latest/bin" >> "$GITHUB_PATH"
+          echo "ANDROID_SDK_ROOT=$SDK" >> "$GITHUB_ENV"
+          echo "ANDROID_AVD_HOME=$HOME/.android/avd" >> "$GITHUB_ENV"
+          mkdir -p "$HOME/.android/avd"
+      - name: Download smoke APKs
+        uses: actions/download-artifact@v4
+        with:
+          name: smoke-apks-${{ github.sha }}
+          path: apks
+      - name: Check the APK's arm64-v8a natives (ELF machine, same set as x86_64)
+        run: |
+          set -euo pipefail
+          mkdir -p natives
+          unzip -q apks/debug/app-debug.apk 'lib/arm64-v8a/*' 'lib/x86_64/*' -d natives
+          if [ -z "$(ls natives/lib/arm64-v8a)" ]; then
+            echo "::error::app-debug.apk carries no lib/arm64-v8a natives"
+            exit 1
+          fi
+          # Libraries with an ELF interpreter are executables (loading them is not meaningful);
+          # the rest are JNI libraries the probe System.loads.
+          : > natives/jni.txt
+          for f in natives/lib/arm64-v8a/*; do
+            machine=$(readelf -h "$f" | sed -n 's/^ *Machine: *//p')
+            if [ -n "$(readelf -lW "$f" | grep INTERP || true)" ]; then kind=executable; else kind="JNI library"; echo "$(basename "$f")" >> natives/jni.txt; fi
+            echo "$(basename "$f"): $machine, $kind"
+            if [ "$machine" != "AArch64" ]; then
+              echo "::error::lib/arm64-v8a/$(basename "$f") is not an AArch64 ELF ($machine)"
+              exit 1
+            fi
+          done
+          if [ ! -s natives/jni.txt ]; then
+            echo "::error::no arm64-v8a JNI library in the APK: nothing for the load probe to load"
+            exit 1
+          fi
+          if ! diff <(ls natives/lib/x86_64) <(ls natives/lib/arm64-v8a); then
+            echo "::error::arm64-v8a and x86_64 natives are different sets of libraries (diff above)"
+            exit 1
+          fi
+      # An instrumentation APK whose only job is System.load of the app's arm64 JNI libraries inside
+      # the app's own (translated) process, then to report what is mapped there. A plain
+      # app_process / shell loader does not work: only a zygote-forked app process has the native
+      # bridge. Instrumentation needs the target's signing key, and the build job's debug key is not
+      # carried over, so all three APKs are re-signed with one throwaway key (signature only; the
+      # contents are untouched).
+      - name: Build the native-load probe APK, re-sign the APKs with one key
+        run: |
+          set -euo pipefail
+          BT=$(ls -d "$ANDROID_SDK_ROOT"/build-tools/* | sort -V | tail -1)
+          AJAR=$(ls -d "$ANDROID_SDK_ROOT"/platforms/android-* | sort -V | tail -1)/android.jar
+          mkdir -p probe/src/ci/nativeprobe probe/out probe/dex
+          cat > probe/src/ci/nativeprobe/Probe.java <<'JAVA'
+          package ci.nativeprobe;
+
+          import android.app.Instrumentation;
+          import android.os.Bundle;
+          import java.io.BufferedReader;
+          import java.io.FileReader;
+          import java.util.TreeSet;
+
+          public class Probe extends Instrumentation {
+            private String libs = "";
+
+            @Override
+            public void onCreate(Bundle args) {
+              libs = args.getString("libs", "");
+              start();
+            }
+
+            @Override
+            public void onStart() {
+              int failed = 0;
+              StringBuilder out = new StringBuilder();
+              for (String path : libs.split(":")) {
+                if (path.isEmpty()) continue;
+                try {
+                  System.load(path);
+                  out.append("LOADED ").append(path).append('\n');
+                } catch (Throwable t) {
+                  failed++;
+                  out.append("FAILED ").append(path).append(" : ").append(t).append('\n');
+                }
+              }
+              TreeSet<String> mapped = new TreeSet<>();
+              try (BufferedReader maps = new BufferedReader(new FileReader("/proc/self/maps"))) {
+                String line;
+                while ((line = maps.readLine()) != null) {
+                  String[] f = line.split("\\s+", 6);
+                  if (f.length < 6) continue;
+                  String p = f[5];
+                  if (p.endsWith("libndk_translation.so")
+                      || (p.startsWith("/data/app/") && (p.contains("/lib/arm64/") || p.contains("/lib/x86")))) {
+                    mapped.add(p);
+                  }
+                }
+              } catch (Throwable t) {
+                failed++;
+                out.append("FAILED reading /proc/self/maps : ").append(t).append('\n');
+              }
+              for (String p : mapped) out.append("MAPPED ").append(p).append('\n');
+              Bundle result = new Bundle();
+              result.putString(Instrumentation.REPORT_KEY_STREAMRESULT, out.toString());
+              finish(failed == 0 ? 0 : 1, result);
+            }
+          }
+          JAVA
+          cat > probe/AndroidManifest.xml <<XML
+          <manifest xmlns:android="http://schemas.android.com/apk/res/android" package="ci.nativeprobe">
+            <uses-sdk android:minSdkVersion="23" android:targetSdkVersion="36" />
+            <application />
+            <instrumentation android:name="ci.nativeprobe.Probe" android:targetPackage="$PKG" />
+          </manifest>
+          XML
+          javac --release 11 -cp "$AJAR" -d probe/out probe/src/ci/nativeprobe/Probe.java
+          "$BT/d8" --lib "$AJAR" --min-api 23 --output probe/dex $(find probe/out -name '*.class')
+          "$BT/aapt2" link -o probe/raw.apk --manifest probe/AndroidManifest.xml -I "$AJAR" \
+            --min-sdk-version 23 --target-sdk-version 36
+          (cd probe/dex && zip -q ../raw.apk classes.dex)
+          cp probe/raw.apk apks/probe.apk
+          keytool -genkeypair -keystore probe/ci.jks -storepass android -keypass android -alias ci \
+            -keyalg RSA -keysize 2048 -validity 3650 -dname CN=ci > /dev/null
+          for apk in apks/debug/app-debug.apk apks/androidTest/debug/app-debug-androidTest.apk apks/probe.apk; do
+            "$BT/zipalign" -f 4 "$apk" "$apk.aligned"
+            mv "$apk.aligned" "$apk"
+            "$BT/apksigner" sign --ks probe/ci.jks --ks-pass pass:android "$apk" 2> "$RUNNER_TEMP/sign.err" \
+              || { cat "$RUNNER_TEMP/sign.err"; exit 1; }
+            "$BT/apksigner" verify "$apk" 2> /dev/null
+            echo "re-signed $apk"
+          done
+      - name: Enable KVM
+        run: |
+          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' \
+            | sudo tee /etc/udev/rules.d/99-kvm4all.rules
+          sudo udevadm control --reload-rules
+          sudo udevadm trigger --name-match=kvm
+      - name: Install system image, create AVD
+        run: |
+          set -eu
+          yes | sdkmanager --licenses > /dev/null || true
+          sdkmanager --install emulator > /dev/null
+          sdkmanager --install "system-images;android-$ANDROID_API;google_apis;x86_64" > /dev/null
+          echo no | avdmanager create avd --force -n smoke \
+            --package "system-images;android-$ANDROID_API;google_apis;x86_64"
+          avdmanager list avd | grep -A2 'Name: smoke'
+          printf 'hw.cpu.ncore=%s\nhw.ramSize=%s\ndisk.dataPartition.size=8G\n' "$EMU_CORES" "$EMU_RAM" \
+            >> "${ANDROID_AVD_HOME:-$HOME/.android/avd}/smoke.avd/config.ini"
+      - name: Boot emulator
+        timeout-minutes: 20
+        run: |
+          set -eu
+          boot_start=$(date +%s)
+          nohup emulator -avd smoke -port 5554 -no-window -gpu swiftshader_indirect -noaudio \
+            -no-boot-anim -no-snapshot -no-metrics -camera-back none -camera-front none \
+            -dns-server 8.8.8.8 \
+            > /tmp/emulator.log 2>&1 &
+          deadline=$(( boot_start + BOOT_TIMEOUT ))
+          until [ "$(adb shell getprop sys.boot_completed 2>/dev/null | tr -d '\r')" = "1" ]; do
+            if [ "$(date +%s)" -ge "$deadline" ]; then
+              echo "::error::emulator did not boot within ${BOOT_TIMEOUT}s - emulator log tail:"
+              tail -50 /tmp/emulator.log
+              exit 1
+            fi
+            sleep 5
+          done
+          echo "Emulator booted (android-$ANDROID_API, $EMU_CORES cores / $EMU_RAM) in $(( $(date +%s) - boot_start ))s."
+          abilist=$(adb shell getprop ro.product.cpu.abilist | tr -d '\r')
+          echo "ro.product.cpu.abilist=$abilist"
+          case ",$abilist," in
+            *,arm64-v8a,*) ;;
+            *)
+              echo "::error::this image has no arm64-v8a translation (abilist: $abilist); the ARM leg would test nothing"
+              exit 1
+              ;;
+          esac
+          unlocked=0
+          for _ in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20 21 22 23 24 25 26 27 28 29 30 31 32 33 34 35 36; do
+            if adb shell dumpsys user 2>/dev/null | tr -d '\r' | grep -q RUNNING_UNLOCKED; then
+              unlocked=1
+              break
+            fi
+            adb shell wm dismiss-keyguard >/dev/null 2>&1 || true
+            sleep 5
+          done
+          if [ "$unlocked" = "1" ]; then
+            echo "User 0 state RUNNING_UNLOCKED; waiting for CE storage."
+          else
+            echo "::warning::user-unlock marker never appeared (3 min); proceeding anyway"
+          fi
+          ce_ok=0
+          for _ in 1 2 3 4 5 6 7 8 9 10 11 12; do
+            if [ "$(adb shell getprop sys.user.0.ce_available 2>/dev/null | tr -d '\r')" = "true" ]; then
+              ce_ok=1
+              break
+            fi
+            sleep 5
+          done
+          if [ "$ce_ok" = "1" ]; then
+            echo "User 0 CE storage available."
+          else
+            echo "::warning::sys.user.0.ce_available never became true; proceeding anyway"
+          fi
+          sleep 20
+          last=""; stable=0; empty=0
+          for _ in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20 21 22 23 24; do
+            cur=$(adb shell pidof com.google.android.apps.nexuslauncher 2>/dev/null | tr -d '\r' || true)
+            if [ -z "$cur" ]; then
+              empty=$((empty+1))
+              if [ "$empty" -ge 3 ]; then break; fi
+            elif [ "$cur" = "$last" ]; then
+              stable=$((stable+1))
+              if [ "$stable" -ge 3 ]; then break; fi
+            else
+              stable=0
+            fi
+            last="$cur"
+            sleep 5
+          done
+          echo "Launcher settled (pid $last, stability $stable/3, empty $empty)."
+          for _ in 1 2 3 4 5; do adb shell input keyevent 82 >/dev/null 2>&1 && break; sleep 3; done
+          adb shell wm dismiss-keyguard >/dev/null 2>&1 || true
+          adb shell settings put global private_dns_mode off >/dev/null 2>&1 || true
+          echo 'Network probe (ping www.telegram.org):'
+          adb shell ping -c 1 www.telegram.org 2>&1 | head -2 || true
+          adb shell settings put global window_animation_scale 0.0 >/dev/null 2>&1 || true
+          adb shell settings put global transition_animation_scale 0.0 >/dev/null 2>&1 || true
+          adb shell settings put global animator_duration_scale 0.0 >/dev/null 2>&1 || true
+      - name: Install APKs with --abi arm64-v8a, run the launch smoke test
+        run: |
+          set -euo pipefail
+          for _ in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15; do
+            adb shell pm path android >/dev/null 2>&1 && break
+            echo "package service not answering yet, waiting..."
+            sleep 2
+          done
+          install_with_retry() {
+            for _ in 1 2 3 4 5 6 7 8 9 10; do
+              if adb install -r -g --abi arm64-v8a "$1"; then return 0; fi
+              echo "install of $1 refused (service settling), retrying in 5s..."
+              sleep 5
+            done
+            echo "::error::could not install $1 after 10 attempts"
+            return 1
+          }
+          adb logcat -c
+          install_with_retry apks/debug/app-debug.apk
+          install_with_retry apks/androidTest/debug/app-debug-androidTest.apk
+          install_with_retry apks/probe.apk
+          for _ in 1 2 3 4 5 6 7 8 9 10; do
+            adb shell pm path "$PKG" | grep -q apk && break
+            echo "package not fully registered yet, waiting..."
+            sleep 3
+          done
+          adb shell pm path "$PKG" | grep -q apk
+          adb shell am instrument -w -e class "$PKG.MainSmokeTest" \
+            "$PKG.test/androidx.test.runner.AndroidJUnitRunner" \
+            2>&1 | tr -d '\r' | tee "$RUNNER_TEMP/instrument.log"
+          if ! grep -qE '^OK \([0-9]+ tests?\)$' "$RUNNER_TEMP/instrument.log"; then
+            echo "::error::smoke test did not complete on the arm64-v8a leg (transcript above)"
+            exit 1
+          fi
+          if grep -qE 'FAILURES!!!|INSTRUMENTATION_FAILED|Process crashed|Test run failed' "$RUNNER_TEMP/instrument.log"; then
+            echo "::error::smoke instrumentation failed on the arm64-v8a leg (transcript above)"
+            exit 1
+          fi
+          if grep -q 'smoke_warning=' "$RUNNER_TEMP/instrument.log"; then
+            echo "::warning::arm64-v8a leg: $(grep -m1 -o 'smoke_warning=.*' "$RUNNER_TEMP/instrument.log" | cut -d= -f2-)"
+          fi
+      - name: Prove the app ran arm64-v8a code (installed ABI, executable, in-process load)
+        run: |
+          set -euo pipefail
+          fail() { echo "::error::$1"; exit 1; }
+          dump=$(adb shell dumpsys package "$PKG" | tr -d '\r')
+          echo "$dump" | grep -E 'primaryCpuAbi=|secondaryCpuAbi=|cpuAbiOverride=|legacyNativeLibraryDir='
+          echo "$dump" | grep -q 'primaryCpuAbi=arm64-v8a' \
+            || fail "package manager did not choose arm64-v8a as the primary ABI"
+          apkdir=$(adb shell pm path "$PKG" | head -1 | sed 's/^package://; s#/base\.apk.*##' | tr -d '\r')
+          libdir="$apkdir/lib/arm64"
+          installed=$(adb shell ls "$libdir" | tr -d '\r' | sort)
+          expected=$(ls natives/lib/arm64-v8a | sort)
+          echo "installed in $libdir:"; echo "$installed"
+          [ "$installed" = "$expected" ] || fail "installed lib/arm64 differs from the APK's lib/arm64-v8a"
+          version=$(adb shell "$libdir/libsnapserver.so --version" 2>&1 | tr -d '\r' | head -1)
+          echo "libsnapserver.so --version: $version"
+          case "$version" in
+            "snapserver v"*) ;;
+            *) fail "the arm64 libsnapserver.so did not run" ;;
+          esac
+          libs=$(while read -r lib; do printf '%s:' "$libdir/$lib"; done < natives/jni.txt)
+          adb shell am instrument -w -e libs "$libs" ci.nativeprobe/ci.nativeprobe.Probe \
+            2>&1 | tr -d '\r' | tee "$RUNNER_TEMP/probe.log"
+          if grep -q '^FAILED ' "$RUNNER_TEMP/probe.log"; then
+            fail "an arm64 JNI library failed to load in the app process (FAILED lines above)"
+          fi
+          while read -r lib; do
+            grep -q "^LOADED .*/lib/arm64/$lib\$" "$RUNNER_TEMP/probe.log" || fail "$lib was not loaded"
+            grep -q "^MAPPED .*/lib/arm64/$lib\$" "$RUNNER_TEMP/probe.log" || fail "$lib is not mapped in the app process"
+          done < natives/jni.txt
+          grep -q '^MAPPED .*libndk_translation\.so$' "$RUNNER_TEMP/probe.log" \
+            || fail "the app process has no ARM translator mapped: it is not running as an arm64 process"
+          if grep -q '^MAPPED /data/app/.*/lib/x86' "$RUNNER_TEMP/probe.log"; then
+            fail "an x86 library is mapped into the app process on the ARM leg"
+          fi
+      - name: Capture failure evidence (logcat, dumpsys, view dump)
+        if: failure()
+        run: |
+          mkdir -p evidence
+          timeout 30 adb shell uiautomator dump /sdcard/smoke-dump.xml >/dev/null 2>&1 || true
+          timeout 30 adb pull /sdcard/smoke-dump.xml evidence/ >/dev/null 2>&1 || true
+          timeout 30 adb shell dumpsys package "$PKG" > evidence/dumpsys-package.txt 2>/dev/null || true
+          timeout 30 adb logcat -d > evidence/logcat.txt 2>/dev/null || true
+          cp "$RUNNER_TEMP/probe.log" evidence/ 2>/dev/null || true
+          cp /tmp/emulator.log evidence/ 2>/dev/null || true
+      - name: Upload failure evidence
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: smoke-failure-arm64-${{ github.run_id }}
+          path: evidence/
+          if-no-files-found: ignore
