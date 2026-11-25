@@ -319,7 +319,7 @@ class PlaybackService : MediaSessionService() {
     // the image, so it runs in the background once per new picture (keyed on the bytes by identity:
     // the same ByteArray is reused for a track's lifetime) and the now-playing is re-published when
     // it lands. Until then the push goes out without art.
-    private val snapArtwork by lazy { SnapcastArtwork(applicationContext) }
+    private val snapArtwork by lazy { SnapcastArtwork.get(applicationContext) }
 
     @Volatile private var snapArtBytes: ByteArray? = null
 
@@ -1146,6 +1146,16 @@ class PlaybackService : MediaSessionService() {
         outgoing.player.release()
         if (!playWhenReady) incoming.player.pause()
         Log.d(TAG, "crossfade handed off to ${xf.target.chatId}/${xf.target.messageId}, broadcast ${mixer?.leadDelayMs()} ms behind its tee")
+    }
+
+    /**
+     * Swiping the app out of recents ends everything: media3's default keeps a playing service
+     * alive, and with it the broadcast and a public link nobody could turn off any more. [onDestroy]
+     * does the teardown (broadcast, link and its request, players).
+     */
+    override fun onTaskRemoved(rootIntent: Intent?) {
+        stopSelf()
+        super.onTaskRemoved(rootIntent)
     }
 
     override fun onDestroy() {
