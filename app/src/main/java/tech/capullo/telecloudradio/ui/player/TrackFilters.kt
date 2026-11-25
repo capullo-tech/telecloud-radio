@@ -44,7 +44,10 @@ internal fun extensionKey(track: MediaMessageEntity): String? = track.fileName?.
 
 // SimpleDateFormat is not thread-safe, so keep one per thread via ThreadLocal rather than a
 // plain shared val (matches() stays on main today, but this keeps monthKey safe anywhere).
-private val monthFormat = ThreadLocal.withInitial { SimpleDateFormat("MMM yyyy", Locale.getDefault()) }
+// ThreadLocal.withInitial needs API 26 (minSdk is 23).
+private val monthFormat = object : ThreadLocal<SimpleDateFormat>() {
+    override fun initialValue() = SimpleDateFormat("MMM yyyy", Locale.getDefault())
+}
 
 internal fun monthKey(dateStr: String?): String? = PerfTrace.section("Filters.monthKey") {
     if (dateStr.isNullOrBlank()) return@section null

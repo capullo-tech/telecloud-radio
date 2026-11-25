@@ -51,7 +51,7 @@ class AudioMetadataReader @Inject constructor() {
 
         // MediaMetadataRetriever - more accurate bitrate reading
         runCatching {
-            MediaMetadataRetriever().use { mmr ->
+            withRetriever { mmr ->
                 mmr.setDataSource(path)
                 val mmrBitrate = mmr.extractMetadata(MediaMetadataRetriever.METADATA_KEY_BITRATE)
                     ?.toLongOrNull()?.div(1000)?.toInt()
@@ -210,3 +210,16 @@ internal fun replayGainFrom(tag: Tag): ReplayGain? {
 
 // Values vary by tagger: "-6.5 dB", "-6.5dB", "-6.5".
 private fun parseReplayGainNumber(raw: String): Float? = raw.trim().removeSuffix("dB").removeSuffix("db").removeSuffix("DB").trim().takeIf { it.isNotEmpty() }?.toFloatOrNull()
+
+/**
+ * Runs [block] on a new [MediaMetadataRetriever] and releases it. Not `use {}`: the retriever is
+ * AutoCloseable only from API 29, and on older phones `use` fails on it (minSdk is 23).
+ */
+internal inline fun <T> withRetriever(block: (MediaMetadataRetriever) -> T): T {
+    val retriever = MediaMetadataRetriever()
+    try {
+        return block(retriever)
+    } finally {
+        retriever.release()
+    }
+}

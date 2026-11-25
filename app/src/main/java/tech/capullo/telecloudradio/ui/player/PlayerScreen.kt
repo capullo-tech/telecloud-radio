@@ -1312,7 +1312,7 @@ private fun QueueTab(
                     t.performer?.lowercase()?.contains(q) == true ||
                     t.fileName?.lowercase()?.contains(q) == true
             }.map { (qIdx, track) ->
-                val occurrence = occurrences.getOrDefault(track.messageId, 0)
+                val occurrence = occurrences[track.messageId] ?: 0
                 occurrences[track.messageId] = occurrence + 1
                 QueueRow(qIdx, track, "${track.messageId}#$occurrence")
             }
