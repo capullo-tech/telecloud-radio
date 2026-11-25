@@ -1,0 +1,5 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- The black of the legacy icon's plate and of the splash screen (themes.xml). -->
+    <color name="ic_launcher_background">#000000</color>
+</resources>
