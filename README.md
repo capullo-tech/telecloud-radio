@@ -6,6 +6,10 @@ broadcast to any number of [Snapcast](https://github.com/badaix/snapcast)
 clients for synchronized multi-device listening - with a built-in web player
 for browser clients.
 
+Lyrics come from [LRCLIB](https://lrclib.net): the lyrics button on the player swaps the album
+art for them, synced to what the speakers play when LRCLIB has timed lyrics. LRCLIB receives the
+artist, title and length of each track that plays; Settings > Look up lyrics online turns that off.
+
 ## Screenshots
 
 <p align="center">

@@ -24,10 +24,16 @@ import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.drop
+import kotlinx.coroutines.flow.map
+import kotlinx.coroutines.flow.scan
+import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.suspendCancellableCoroutine
 import kotlinx.coroutines.withContext
@@ -38,6 +44,10 @@ import tech.capullo.telecloudradio.data.TrackKey
 import tech.capullo.telecloudradio.data.db.AudioAnalysisDao
 import tech.capullo.telecloudradio.data.db.AudioAnalysisEntity
 import tech.capullo.telecloudradio.data.db.MediaMessageEntity
+import tech.capullo.telecloudradio.data.lyrics.LyricsRepository
+import tech.capullo.telecloudradio.data.lyrics.LyricsState
+import tech.capullo.telecloudradio.data.lyrics.LyricsTiming
+import tech.capullo.telecloudradio.data.lyrics.LyricsTrack
 import tech.capullo.telecloudradio.data.playlist.ActiveTrackRepository
 import tech.capullo.telecloudradio.data.playlist.PlaybackCommand
 import tech.capullo.telecloudradio.data.playlist.PlaylistRepository
@@ -50,6 +60,7 @@ import tech.capullo.telecloudradio.player.DownloadManager
 import tech.capullo.telecloudradio.player.PlaybackService
 import tech.capullo.telecloudradio.player.trackKey
 import tech.capullo.telecloudradio.player.withRetriever
+import tech.capullo.telecloudradio.snapcast.SnapcastManager
 import tech.capullo.telecloudradio.util.PerfTrace
 import java.io.File
 import javax.inject.Inject
@@ -99,6 +110,8 @@ class PlayerViewModel @Inject constructor(
     private val audioAnalysisDao: AudioAnalysisDao,
     private val settings: SettingsRepository,
     private val albumArtFetcher: AlbumArtFetcher,
+    private val lyricsRepository: LyricsRepository,
+    private val snapcastManager: SnapcastManager,
 ) : ViewModel() {
 
     private val _uiState = MutableStateFlow(PlayerUiState(isLoading = true))
@@ -113,6 +126,41 @@ class PlayerViewModel @Inject constructor(
     // render them.
     private val _positionState = MutableStateFlow(0L)
     val positionState: StateFlow<Long> = _positionState.asStateFlow()
+
+    // Lyrics of the track the player shows. The lookup starts where that track becomes the shown,
+    // audible one (playTrack's truthful swap, onGaplessAdvance after a gapless join or a crossfade
+    // handoff), so the lyrics switch together with the title and art, and positionState is then
+    // already the new track's.
+    val lyrics: StateFlow<PlayerLyrics> = combine(
+        uiState.map { state -> state.track?.let { TrackKey(it.chatId, it.messageId) } }.distinctUntilChanged(),
+        lyricsRepository.current,
+        ::Pair,
+    )
+        .scan<Pair<TrackKey?, LyricsState?>, PlayerLyrics>(PlayerLyrics.None) { previous, (key, state) ->
+            PlayerLyrics.next(previous, key, state)
+        }
+        .drop(1)
+        .distinctUntilChanged()
+        .stateIn(viewModelScope, SharingStarted.Lazily, PlayerLyrics.None)
+
+    // Total delay of the lyric lines behind positionState: what the speakers lag the player
+    // (snapserver buffer less this device's client latency), the Settings timing, and this song's
+    // nudge.
+    val lyricsOffsetMs: StateFlow<Long> = combine(
+        snapcastManager.state.map { LyricsTiming.autoDelayMs(it.groups, snapcastManager.localClientId) },
+        settings.lyricsDelayMs,
+        lyrics.map { (it as? PlayerLyrics.Shown)?.offsetMs ?: 0L },
+    ) { auto, manual, song -> auto + manual + song }
+        .distinctUntilChanged()
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), 0L)
+
+    fun nudgeLyrics(deltaMs: Long) {
+        val track = _uiState.value.track ?: return
+        lyricsRepository.nudge(TrackKey(track.chatId, track.messageId), deltaMs)
+    }
+
+    // Opening the player asks again for lyrics whose lookup failed (offline, LRCLIB down).
+    fun retryFailedLyrics() = lyricsRepository.retryFailed()
 
     // Download progress (0f..1f) of the current/active track while it's downloading, so the play
     // button can show a determinate ring instead of an indeterminate spinner. Null before the first
@@ -943,6 +991,7 @@ class PlayerViewModel @Inject constructor(
             _activeDownloadProgress.value = null
             // ~0 at a gapless join, but the fade length after a crossfade handoff.
             _positionState.value = controller?.currentPosition ?: 0L
+            lyricsRepository.onTrackStarted(LyricsTrack.of(displayTrack))
             _uiState.value = _uiState.value.copy(
                 track = displayTrack,
                 albumArt = albumArt,
@@ -1254,6 +1303,7 @@ class PlayerViewModel @Inject constructor(
         // carries the fields deferred above, not just the metadata.
         _activeDownloadProgress.value = null
         _positionState.value = 0L
+        lyricsRepository.onTrackStarted(LyricsTrack.of(displayTrack))
         _uiState.value = _uiState.value.copy(
             track = displayTrack,
             albumArt = albumArt,

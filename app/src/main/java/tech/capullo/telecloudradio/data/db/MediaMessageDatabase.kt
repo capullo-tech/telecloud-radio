@@ -6,14 +6,15 @@ import androidx.room.migration.Migration
 import androidx.sqlite.db.SupportSQLiteDatabase
 
 @Database(
-    entities = [MediaMessageEntity::class, AudioAnalysisEntity::class, TrackGainEntity::class],
-    version = 7,
+    entities = [MediaMessageEntity::class, AudioAnalysisEntity::class, TrackGainEntity::class, LyricsEntity::class],
+    version = 8,
     exportSchema = false,
 )
 abstract class MediaMessageDatabase : RoomDatabase() {
     abstract fun mediaMessageDao(): MediaMessageDao
     abstract fun audioAnalysisDao(): AudioAnalysisDao
     abstract fun trackGainDao(): TrackGainDao
+    abstract fun lyricsDao(): LyricsDao
 
     companion object {
         val MIGRATION_1_2 = object : Migration(1, 2) {
@@ -178,6 +179,24 @@ abstract class MediaMessageDatabase : RoomDatabase() {
                 )
                 database.execSQL("DROP TABLE track_gain")
                 database.execSQL("ALTER TABLE track_gain_new RENAME TO track_gain")
+            }
+        }
+
+        // Lyrics cache (LyricsEntity): a new table, nothing to carry over.
+        val MIGRATION_7_8 = object : Migration(7, 8) {
+            override fun migrate(database: SupportSQLiteDatabase) {
+                database.execSQL(
+                    """CREATE TABLE IF NOT EXISTS lyrics (
+                        chatId INTEGER NOT NULL,
+                        messageId INTEGER NOT NULL,
+                        kind TEXT NOT NULL,
+                        source TEXT,
+                        text TEXT,
+                        fetchedAt INTEGER NOT NULL,
+                        offsetMs INTEGER NOT NULL,
+                        PRIMARY KEY(chatId, messageId)
+                    )""",
+                )
             }
         }
     }

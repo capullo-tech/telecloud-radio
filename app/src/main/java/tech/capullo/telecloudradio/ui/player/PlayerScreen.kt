@@ -126,6 +126,7 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.produceState
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -266,6 +267,15 @@ fun PlayerScreen(
         }
     }
 
+    // Listen-in returned above: a station heard from another server has no local track to look
+    // lyrics up for. The lyrics view replaces the art until toggled off, or until a track without
+    // lyrics comes on.
+    val lyrics by viewModel.lyrics.collectAsStateWithLifecycle()
+    val lyricsOffsetMs by viewModel.lyricsOffsetMs.collectAsStateWithLifecycle()
+    var lyricsOpen by rememberSaveable { mutableStateOf(false) }
+    LaunchedEffect(lyrics) { if (lyrics == PlayerLyrics.None) lyricsOpen = false }
+    LaunchedEffect(Unit) { viewModel.retryFailedLyrics() }
+
     Scaffold(
         modifier = Modifier.blur(snapBackdropBlur),
         snackbarHost = { SnackbarHost(snackbarHostState) },
@@ -334,6 +344,10 @@ fun PlayerScreen(
                             connectedOthers = others,
                             anyConnected = anyConnected,
                             onOpenClients = { showSnapSheet = true },
+                            lyrics = lyrics,
+                            lyricsOffsetMs = lyricsOffsetMs,
+                            lyricsOpen = lyricsOpen,
+                            onToggleLyrics = { lyricsOpen = !lyricsOpen },
                         )
                     }
                 }
@@ -463,6 +477,10 @@ private fun PortraitPlayer(
     connectedOthers: Int,
     anyConnected: Boolean,
     onOpenClients: () -> Unit,
+    lyrics: PlayerLyrics,
+    lyricsOffsetMs: Long,
+    lyricsOpen: Boolean,
+    onToggleLyrics: () -> Unit,
 ) {
     // Fit-to-space layout. The art is the SOLE weight holder; the track info and the transport
     // (seek + controls + secondary row) are fixed, non-weighted siblings, so the layout hands the
@@ -480,10 +498,23 @@ private fun PortraitPlayer(
             contentAlignment = Alignment.BottomCenter,
         ) {
             val artSide = minOf(maxWidth, maxHeight)
-            AlbumArtDisplay(
-                albumArt = state.albumArt,
-                modifier = Modifier.size(artSide).artGestures(viewModel),
-            )
+            // The lyrics take the art's square, so opening them moves nothing else on screen.
+            if (lyricsOpen && lyrics != PlayerLyrics.None) {
+                LyricsPanel(
+                    lyrics = (lyrics as? PlayerLyrics.Shown)?.lyrics,
+                    positionState = viewModel.positionState,
+                    offsetMs = lyricsOffsetMs,
+                    songOffsetMs = (lyrics as? PlayerLyrics.Shown)?.offsetMs ?: 0L,
+                    onSeek = viewModel::seekTo,
+                    onNudge = viewModel::nudgeLyrics,
+                    modifier = Modifier.size(artSide),
+                )
+            } else {
+                AlbumArtDisplay(
+                    albumArt = state.albumArt,
+                    modifier = Modifier.size(artSide).artGestures(viewModel),
+                )
+            }
         }
         Spacer(Modifier.height(16.dp))
         state.track?.let {
@@ -518,6 +549,7 @@ private fun PortraitPlayer(
                     )
                 }
                 Row(
+                    modifier = Modifier.weight(1f, fill = false),
                     horizontalArrangement = Arrangement.spacedBy(4.dp),
                     verticalAlignment = Alignment.CenterVertically,
                 ) {
@@ -541,6 +573,7 @@ private fun PortraitPlayer(
                             tint = MaterialTheme.colorScheme.onSurfaceVariant,
                         )
                     }
+                    if (lyrics != PlayerLyrics.None) LyricsButton(open = lyricsOpen, onClick = onToggleLyrics)
                 }
                 IconButton(onClick = viewModel::toggleQueue) {
                     Icon(Icons.AutoMirrored.Filled.QueueMusic, contentDescription = "Queue")

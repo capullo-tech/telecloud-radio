@@ -16,6 +16,7 @@ import tech.capullo.source.telegram.data.telegram.TelegramException
 import tech.capullo.telecloudradio.data.SettingsRepository
 import tech.capullo.telecloudradio.data.TrackKey
 import tech.capullo.telecloudradio.data.db.AudioAnalysisDao
+import tech.capullo.telecloudradio.data.db.LyricsDao
 import tech.capullo.telecloudradio.data.db.MediaMessageDao
 import tech.capullo.telecloudradio.data.db.TrackGainDao
 import tech.capullo.telecloudradio.data.db.TrackGainEntity
@@ -32,6 +33,7 @@ class DownloadManager @Inject constructor(
     private val settings: SettingsRepository,
     private val analysisDao: AudioAnalysisDao,
     private val trackGainDao: TrackGainDao,
+    private val lyricsDao: LyricsDao,
     private val audioMetadataReader: AudioMetadataReader,
     private val audioAnalyzer: AudioAnalyzer,
     private val albumArtFetcher: AlbumArtFetcher,
@@ -183,6 +185,7 @@ class DownloadManager @Inject constructor(
             albumArtFetcher.clearAll()
             analysisDao.deleteAll()
             trackGainDao.deleteAll()
+            lyricsDao.deleteAll()
             dao.deleteAll()
         } else {
             dao.getLocalPathsForChat(chatId).forEach { File(it).delete() }
@@ -193,6 +196,7 @@ class DownloadManager @Inject constructor(
             }
             analysisDao.deleteByChat(chatId)
             trackGainDao.deleteByChat(chatId)
+            lyricsDao.deleteByChat(chatId)
             dao.deleteByChat(chatId)
         }
     }
