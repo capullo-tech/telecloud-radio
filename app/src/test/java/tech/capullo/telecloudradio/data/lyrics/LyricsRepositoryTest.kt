@@ -9,14 +9,17 @@ import io.mockk.mockk
 import io.mockk.mockkStatic
 import io.mockk.unmockkStatic
 import kotlinx.coroutines.ExperimentalCoroutinesApi
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.test.TestScope
 import kotlinx.coroutines.test.advanceUntilIdle
+import kotlinx.coroutines.test.runCurrent
 import kotlinx.coroutines.test.runTest
 import org.junit.After
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
+import org.junit.Assert.assertSame
 import org.junit.Assert.assertTrue
 import org.junit.Before
 import org.junit.Test
@@ -26,6 +29,7 @@ import tech.capullo.telecloudradio.data.db.LyricsDao
 import tech.capullo.telecloudradio.data.db.LyricsEntity
 import tech.capullo.telecloudradio.data.lyrics.LyricsRepository.Companion.KIND_NONE
 import tech.capullo.telecloudradio.data.lyrics.LyricsRepository.Companion.KIND_SYNCED
+import tech.capullo.telecloudradio.data.lyrics.LyricsRepository.Companion.MAX_TRACK_SECONDS
 import java.io.IOException
 
 @OptIn(ExperimentalCoroutinesApi::class)
@@ -65,6 +69,9 @@ class LyricsRepositoryTest {
 
     // Real-looking names: "Artist" and "Title" are tag placeholders the query treats as missing.
     private val track = LyricsTrack(key, title = "Roads", performer = "Portishead", fileName = null, durationS = 200)
+
+    // Audio Telegram has no length for: sent without metadata, or as a file.
+    private val unmeasured = track.copy(durationS = 0)
 
     private val syncedRecord = LrclibRecord(duration = 200.0, syncedLyrics = "[00:01.00]a\n[00:02.00]b", plainLyrics = "a\nb")
 
@@ -161,6 +168,123 @@ class LyricsRepositoryTest {
 
         assertTrue(dao.rows.isEmpty())
         coVerify(exactly = 0) { lrclib.find(any(), any()) }
+    }
+
+    @Test
+    fun `a track without a Telegram length is looked up with the player's, rounded`() = runTest {
+        val repository = repository()
+        coEvery { lrclib.find(any(), any()) } returns
+            LrclibMatch(LyricsSource.LRCLIB_GET, syncedRecord)
+
+        assertNull(play(repository, unmeasured).lyrics)
+        assertTrue(dao.rows.isEmpty())
+
+        repository.onDurationLearned(key, 199_600)
+        advanceUntilIdle()
+
+        val found = repository.current.value as LyricsState.Done
+        assertEquals(LyricsSource.LRCLIB_GET, found.lyrics?.source)
+        assertEquals(KIND_SYNCED, dao.rows.getValue(key).kind)
+        coVerify(exactly = 1) { lrclib.find(any(), any()) }
+        coVerify(exactly = 1) { lrclib.find(LyricsQuery("Portishead", "Roads"), 200) }
+    }
+
+    @Test
+    fun `the player reporting the length again does not ask LRCLIB again`() = runTest {
+        val repository = repository()
+        // A failed lookup caches nothing, so a second lookup would reach LRCLIB again.
+        coEvery { lrclib.find(any(), any()) } coAnswers {
+            delay(1_000)
+            throw IOException("offline")
+        }
+        play(repository, unmeasured)
+
+        repository.onDurationLearned(key, 200_000)
+        runCurrent()
+        // Once while the first lookup waits on LRCLIB, once after it failed.
+        repository.onDurationLearned(key, 200_000)
+        advanceUntilIdle()
+        repository.onDurationLearned(key, 200_000)
+        advanceUntilIdle()
+
+        assertTrue((repository.current.value as LyricsState.Done).failed)
+        coVerify(exactly = 1) { lrclib.find(any(), any()) }
+    }
+
+    @Test
+    fun `a length for another track is ignored`() = runTest {
+        val repository = repository()
+        val skipped = play(repository, unmeasured)
+
+        repository.onDurationLearned(TrackKey(key.chatId, messageId = 8), 200_000)
+        repository.onDurationLearned(TrackKey(chatId = -200, messageId = key.messageId), 200_000)
+        advanceUntilIdle()
+
+        assertSame(skipped, repository.current.value)
+        coVerify(exactly = 0) { lrclib.find(any(), any()) }
+    }
+
+    @Test
+    fun `a track with a Telegram length is not looked up again with the player's`() = runTest {
+        val repository = repository()
+        // Failed, so nothing is cached: a second lookup would reach LRCLIB again.
+        coEvery { lrclib.find(any(), any()) } throws IOException("offline")
+        val failed = play(repository)
+
+        repository.onDurationLearned(key, 203_000)
+        advanceUntilIdle()
+
+        assertSame(failed, repository.current.value)
+        coVerify(exactly = 1) { lrclib.find(any(), any()) }
+    }
+
+    @Test
+    fun `a measured length longer than a song stays skipped`() = runTest {
+        val repository = repository()
+        val skipped = play(repository, unmeasured)
+
+        repository.onDurationLearned(key, (MAX_TRACK_SECONDS + 1) * 1_000)
+
+        assertSame(skipped, repository.current.value)
+        advanceUntilIdle()
+        assertTrue(dao.rows.isEmpty())
+        coVerify(exactly = 0) { lrclib.find(any(), any()) }
+    }
+
+    @Test
+    fun `lyrics cached with the player's length are kept on the next play`() = runTest {
+        val repository = repository()
+        coEvery { lrclib.find(any(), any()) } returns
+            LrclibMatch(LyricsSource.LRCLIB_GET, syncedRecord)
+        play(repository, unmeasured)
+        repository.onDurationLearned(key, 200_000)
+        advanceUntilIdle()
+        play(repository, track.copy(key = TrackKey(key.chatId, messageId = 8)))
+
+        val cached = play(repository, unmeasured)
+        repository.onDurationLearned(key, 200_000)
+
+        assertEquals(LyricsSource.LRCLIB_GET, cached.lyrics?.source)
+        assertSame(cached, repository.current.value)
+    }
+
+    @Test
+    fun `retrying a failed lookup asks with the length the player supplied`() = runTest {
+        val repository = repository()
+        coEvery { lrclib.find(any(), any()) } throws IOException("offline")
+        play(repository, unmeasured)
+        repository.onDurationLearned(key, 200_000)
+        advanceUntilIdle()
+        assertTrue((repository.current.value as LyricsState.Done).failed)
+
+        coEvery { lrclib.find(any(), any()) } returns
+            LrclibMatch(LyricsSource.LRCLIB_GET, syncedRecord)
+        repository.retryFailed()
+        advanceUntilIdle()
+
+        val retried = repository.current.value as LyricsState.Done
+        assertEquals(LyricsSource.LRCLIB_GET, retried.lyrics?.source)
+        coVerify(exactly = 2) { lrclib.find(LyricsQuery("Portishead", "Roads"), 200) }
     }
 
     @Test

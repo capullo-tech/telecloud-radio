@@ -20,6 +20,7 @@ import tech.capullo.telecloudradio.data.db.LyricsEntity
 import tech.capullo.telecloudradio.data.db.MediaMessageEntity
 import javax.inject.Inject
 import javax.inject.Singleton
+import kotlin.math.roundToLong
 
 // What a lookup needs from a track: its identity and the names and length LRCLIB matches on.
 data class LyricsTrack(
@@ -30,8 +31,9 @@ data class LyricsTrack(
     val durationS: Long,
 ) {
     companion object {
-        // Telegram's own length for the audio, in whole seconds; 0 when Telegram had none, which
-        // skips the lookup as an unknown length would match any recording.
+        // Telegram's own length for the audio, in whole seconds; 0 when Telegram had none. An
+        // unknown length would match any recording, so the lookup then waits for the length the
+        // player measures (LyricsRepository.onDurationLearned).
         fun of(track: MediaMessageEntity): LyricsTrack = LyricsTrack(
             key = TrackKey(track.chatId, track.messageId),
             title = track.title,
@@ -80,9 +82,17 @@ class LyricsRepository internal constructor(
 
     private var lookup: Job? = null
 
+    // The track the current lookup is for, with the length the player supplied when Telegram had
+    // none, so retryFailed asks with it too.
     private var lastTrack: LyricsTrack? = null
 
     private val offsetWrites = Mutex()
+
+    // Counts lookups so only the newest publishes. A lookup run again for the same track (its
+    // length learned) would otherwise race the first, which also waits on Loading(key): a cancel
+    // does not stop a lookup that already has its answer.
+    private val publishLock = Any()
+    private var lookups = 0
 
     // Called when the player's shown track changes to one that is actually playing. The same
     // track again (a restart, a replay) keeps lyrics it already has instead of blinking through
@@ -90,12 +100,41 @@ class LyricsRepository internal constructor(
     fun onTrackStarted(track: LyricsTrack) {
         val now = _current.value
         if (now?.key == track.key && (now is LyricsState.Loading || (now as? LyricsState.Done)?.lyrics != null)) return
+        startLookup(track)
+    }
+
+    // Looks the current track up again with the length the player measured, when Telegram had
+    // none for it (audio sent without metadata or as a file). Telegram's length stays
+    // authoritative, and the first usable measurement is kept: the player reports the length
+    // again after every seek and rebuffer, which must not start another lookup.
+    fun onDurationLearned(key: TrackKey, durationMs: Long) {
+        val track = lastTrack?.takeIf { it.key == key && it.durationS <= 0 } ?: return
+        // Rounded, not truncated: LRCLIB's exact lookup takes a record within 2 s of this whole
+        // second, and bestMatch one within LrclibClient.LYRICS_DURATION_TOLERANCE_S. Rounding
+        // spends at most half a second of that margin, truncating up to a whole one.
+        val durationS = (durationMs / 1_000.0).roundToLong()
+        if (durationS !in 1..MAX_TRACK_SECONDS) return
+        // Lyrics the cache already had are kept; only a lookup that ran without a length repeats.
+        val now = _current.value
+        if (now is LyricsState.Done && now.key == key && now.lyrics != null) return
+        Log.i(TAG, "duration key=${key.log()} dur=${durationS}s")
+        startLookup(track.copy(durationS = durationS))
+    }
+
+    private fun startLookup(track: LyricsTrack) {
         lookup?.cancel()
         lastTrack = track
-        _current.value = LyricsState.Loading(track.key)
+        val generation = synchronized(publishLock) {
+            _current.value = LyricsState.Loading(track.key)
+            ++lookups
+        }
         lookup = scope.launch {
             val done = load(track)
-            _current.compareAndSet(LyricsState.Loading(track.key), done)
+            synchronized(publishLock) {
+                if (generation == lookups) {
+                    _current.compareAndSet(LyricsState.Loading(track.key), done)
+                }
+            }
         }
     }
 

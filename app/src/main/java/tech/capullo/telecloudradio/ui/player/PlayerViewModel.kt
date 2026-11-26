@@ -162,6 +162,20 @@ class PlayerViewModel @Inject constructor(
     // Opening the player asks again for lyrics whose lookup failed (offline, LRCLIB down).
     fun retryFailedLyrics() = lyricsRepository.retryFailed()
 
+    // Gives the lyrics lookup the length the player measured, which it waits for when Telegram had
+    // none. Only while the controller's current item is the shown track, as the length is that
+    // item's: after a gapless join or a crossfade handoff the controller is on the next item before
+    // onGaplessAdvance shows it, and a playTrack that replaces no audible track shows its track
+    // while the controller still holds the previous one. Runs on READY and again once
+    // onGaplessAdvance shows the track, whose READY can come before that (a join that rebuffered)
+    // or never (a crossfade's incoming player is already READY when the session takes it over).
+    private fun learnLyricsDuration() {
+        val ctrl = controller ?: return
+        val shown = _uiState.value.track?.let { TrackKey(it.chatId, it.messageId) } ?: return
+        if (ctrl.currentMediaItem?.trackKey() != shown) return
+        lyricsRepository.onDurationLearned(shown, ctrl.duration)
+    }
+
     // Download progress (0f..1f) of the current/active track while it's downloading, so the play
     // button can show a determinate ring instead of an indeterminate spinner. Null before the first
     // progress tick (or once the file is on disk) → the button falls back to indeterminate.
@@ -244,6 +258,7 @@ class PlayerViewModel @Inject constructor(
                     if (state == Player.STATE_READY) {
                         val dur = controller?.duration ?: 0L
                         if (dur > 0L) _uiState.value = _uiState.value.copy(trackDuration = dur)
+                        learnLyricsDuration()
                     }
                     if (state == Player.STATE_ENDED) onTrackEnded()
                 }
@@ -1004,6 +1019,7 @@ class PlayerViewModel @Inject constructor(
                 showReactions = false,
                 reactionsInfo = null,
             )
+            learnLyricsDuration()
             activeTrackRepository.set(track, chatId, chatTitle)
             saveLastPlayed(chatId, track.messageId)
             activeTrackRepository.updateTrack(displayTrack)
