@@ -9,7 +9,13 @@ import dagger.Provides
 import dagger.hilt.InstallIn
 import dagger.hilt.android.qualifiers.ApplicationContext
 import dagger.hilt.components.SingletonComponent
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
 import tech.capullo.audio.tunnel.TunnelManager
+import tech.capullo.telecloudradio.data.SettingsRepository
+import tech.capullo.telecloudradio.data.playlist.PlayerStateStore
+import tech.capullo.telecloudradio.data.store.StoreLoader
 import javax.inject.Singleton
 
 @Module
@@ -37,4 +43,18 @@ object AppModule {
     @Provides
     @Singleton
     fun provideTunnelManager(@ApplicationContext context: Context): TunnelManager = TunnelManager(context)
+
+    // Outlives every screen and service: the stores write on it.
+    @Provides
+    @Singleton
+    fun provideAppScope(): CoroutineScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+
+    // Blocks only a caller that needs a store before StoreLoader has read it.
+    @Provides
+    @Singleton
+    fun provideSettingsRepository(loader: StoreLoader): SettingsRepository = loader.settings()
+
+    @Provides
+    @Singleton
+    fun providePlayerStateStore(loader: StoreLoader): PlayerStateStore = loader.playerState()
 }

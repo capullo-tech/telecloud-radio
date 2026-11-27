@@ -625,7 +625,7 @@ fun SettingsScreen(
 
             // Compact rows (label + info-behind-(i) + tight control), ported from QC's
             // dense Settings. Buffer and sleep use +/- steppers with
-            // tap-to-type. NOTE: the VM exposes these as plain SharedPreferences-backed
+            // tap-to-type. NOTE: the VM exposes these as plain store-backed
             // vars (not snapshot state), so each row holds a local mutableStateOf and
             // writes through - reading the var alone won't recompose. Buffer is stored as
             // fractional GB (Float) but stepped in whole GB, so round on read + widen on write.

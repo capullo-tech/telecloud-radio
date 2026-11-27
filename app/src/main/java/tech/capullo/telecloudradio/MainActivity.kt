@@ -24,8 +24,10 @@ import tech.capullo.audio.tunnel.TunnelManager
 import tech.capullo.telecloudradio.data.SettingsRepository
 import tech.capullo.telecloudradio.data.ThemeMode
 import tech.capullo.telecloudradio.data.playlist.ActiveTrackRepository
+import tech.capullo.telecloudradio.data.playlist.PlayerStateStore
 import tech.capullo.telecloudradio.player.PlaybackService
 import tech.capullo.telecloudradio.snapcast.SnapcastManager
+import tech.capullo.telecloudradio.ui.settings.StoreResetDialog
 import tech.capullo.telecloudradio.ui.theme.TelecloudRadioTheme
 import javax.inject.Inject
 
@@ -33,6 +35,8 @@ import javax.inject.Inject
 class MainActivity : ComponentActivity() {
 
     @Inject lateinit var settings: SettingsRepository
+
+    @Inject lateinit var playerState: PlayerStateStore
 
     @Inject lateinit var snapcastManager: SnapcastManager
 
@@ -181,6 +185,7 @@ class MainActivity : ComponentActivity() {
                 albumArt = activePlayback?.albumArt.takeIf { artTheme },
             ) {
                 AppNavHost(joinHost = joinHost, onJoinShown = { joinHost = null })
+                StoreResetDialog(settings, playerState)
             }
         }
         // A recreated activity (savedInstanceState) or a relaunch from Recents carries the intent that
