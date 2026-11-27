@@ -293,6 +293,10 @@ class PlaybackService : MediaSessionService() {
     private var trackStartedElapsedMs = 0L
     private var silenceSkipFiredForItem = false
 
+    // Tracks that failed in a row with none reaching READY in between (main thread). Bounds the
+    // skip in onPlayerError: in a queue where nothing can play, with repeat-all, it would never end.
+    private var failedInARow = 0
+
     // --- Snapcast control-plugin adapter (capullo-audio SnapcontrolPlugin) ---
     // The engine's SnapcontrolPlugin is contract-driven: a StateFlow<NowPlaying> (read) + a
     // PlaybackController (transport), replacing Telecloud's former fat SnapcontrolCallbacks.
@@ -422,6 +426,26 @@ class PlaybackService : MediaSessionService() {
         activeTrackRepository.emitCommand(PlaybackCommand.NEXT)
     }
 
+    // A track the player could not read ends in IDLE with an error and stays there. Seen with
+    // Media3 1.9.0 on an Ogg Opus file named .mp3: sniffing it as MP3, Id3Peeker took the bytes
+    // "ID3" at offset 5590 of the audio for a tag header and peeked the 224 MB its size field
+    // declares (androidx/media#3502, fixed in 1.12.0); the load failed with an OutOfMemoryError.
+    // Nothing told the user, and playback stopped on that track. Same as an undecodable
+    // silence: say so and go to the next track.
+    private fun onTrackFailed(error: PlaybackException) {
+        val playback = activeTrackRepository.activePlayback.value
+        val name = playback?.let { it.track.title ?: it.track.fileName } ?: "this track"
+        failedInARow++
+        if (failedInARow > MAX_FAILED_IN_A_ROW) {
+            Log.w(TAG, "Track failed (${error.errorCodeName}), $failedInARow in a row; stopping: $name", error)
+            activeTrackRepository.emitMessage("Can't play “$name”, nor the tracks before it. Stopped.")
+            return
+        }
+        Log.w(TAG, "Track failed (${error.errorCodeName}); skipping: $name", error)
+        activeTrackRepository.emitMessage("Can't play “$name” - the file could not be read. Skipping.")
+        activeTrackRepository.emitCommand(PlaybackCommand.NEXT)
+    }
+
     // Playback callbacks of whichever deck is primary; completeCrossfade moves it to the new one.
     private val primaryListener = object : Player.Listener {
         override fun onMediaItemTransition(mediaItem: MediaItem?, reason: Int) {
@@ -509,6 +533,7 @@ class PlaybackService : MediaSessionService() {
         }
 
         override fun onPlaybackStateChanged(playbackState: Int) {
+            if (playbackState == Player.STATE_READY) failedInARow = 0
             // A finished playlist or a player error leaves playWhenReady = true, so the
             // callback above never fires; the speaker would be held for silence forever.
             if (playbackState == Player.STATE_ENDED || playbackState == Player.STATE_IDLE) {
@@ -518,6 +543,13 @@ class PlaybackService : MediaSessionService() {
                 // broadcast back from the incoming one.
                 if (!crossfadeHandedOff()) cancelCrossfade(promoteIfHandedOff = false)
             }
+        }
+
+        override fun onPlayerError(error: PlaybackException) {
+            // After the audio has handed off, an error on the outgoing deck's tail is not the
+            // track the user hears; the pending promotion moves on to the incoming one.
+            if (crossfadeHandedOff()) return
+            onTrackFailed(error)
         }
     }
 
@@ -1212,6 +1244,9 @@ class PlaybackService : MediaSessionService() {
         // buffering / short silent intros while still cutting a dead track quickly.
         private const val WATCHDOG_TICK_MS = 1000L
         private const val SILENT_SKIP_MS = 8000L
+
+        // Tracks skipped in a row for a player error before playback stops instead.
+        private const val MAX_FAILED_IN_A_ROW = 3
 
         // How long playback stays paused before the local speaker is released.
         private const val TAIL_DRAIN_POLL_MS = 20L
