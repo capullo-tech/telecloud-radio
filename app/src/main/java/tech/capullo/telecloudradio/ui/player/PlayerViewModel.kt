@@ -50,6 +50,7 @@ import tech.capullo.telecloudradio.data.lyrics.LyricsTiming
 import tech.capullo.telecloudradio.data.lyrics.LyricsTrack
 import tech.capullo.telecloudradio.data.playlist.ActiveTrackRepository
 import tech.capullo.telecloudradio.data.playlist.PlaybackCommand
+import tech.capullo.telecloudradio.data.playlist.PlayerStateStore
 import tech.capullo.telecloudradio.data.playlist.PlaylistRepository
 import tech.capullo.telecloudradio.data.telegram.TelegramRepository
 import tech.capullo.telecloudradio.player.AlbumArtFetcher
@@ -109,6 +110,7 @@ class PlayerViewModel @Inject constructor(
     private val audioAnalyzer: AudioAnalyzer,
     private val audioAnalysisDao: AudioAnalysisDao,
     private val settings: SettingsRepository,
+    private val playerState: PlayerStateStore,
     private val albumArtFetcher: AlbumArtFetcher,
     private val lyricsRepository: LyricsRepository,
     private val snapcastManager: SnapcastManager,
@@ -463,7 +465,7 @@ class PlayerViewModel @Inject constructor(
             }
             val (playOrder, filters) = restoreQueueState()
             val totalSizeGb = playlist.sumOf { it.fileSize ?: 0L } / (1024.0 * 1024.0 * 1024.0)
-            val savedMessageId = getLastPlayed(chatId)
+            val savedMessageId = playerState.lastPlayed(chatId)
             val startIndex = if (savedMessageId != null) {
                 playlist.indexOfFirst { it.messageId == savedMessageId }.takeIf { it >= 0 } ?: 0
             } else {
@@ -497,18 +499,16 @@ class PlayerViewModel @Inject constructor(
     // merging in tracks that were synced while the app was closed. Falls back to
     // the default newest-first full queue. Sets basePlaylist/playlist.
     private fun restoreQueueState(): Pair<PlayOrder, QueueFilters> {
-        val prefs = context.getSharedPreferences("player_prefs", Context.MODE_PRIVATE)
-        val savedOrder = runCatching {
-            PlayOrder.valueOf(prefs.getString("play_order_$chatId", null) ?: "")
-        }.getOrNull()
-        val filters = QueueFilters.fromJson(prefs.getString("filters_$chatId", null))
+        val saved = playerState.queue(chatId)
+        val savedOrder = PlayOrder.entries.firstOrNull { it.name == saved.playOrder }
+        val filters = QueueFilters.fromJson(saved.filters)
         val byId = orderedPlaylist.associateBy { it.messageId }
-        fun tracksFor(key: String) = prefs.getString(key, null)
+        fun tracksFor(ids: String?) = ids
             ?.split(',')
             ?.mapNotNull { it.toLongOrNull()?.let(byId::get) }
             ?: emptyList()
-        val savedBase = tracksFor("base_ids_$chatId")
-        val savedQueue = tracksFor("queue_ids_$chatId")
+        val savedBase = tracksFor(saved.baseIds)
+        val savedQueue = tracksFor(saved.queueIds)
 
         if (savedOrder == null || savedBase.isEmpty()) {
             basePlaylist = orderedPlaylist
@@ -551,20 +551,13 @@ class PlayerViewModel @Inject constructor(
     private fun writeQueueStateNow() {
         PerfTrace.section("VM.saveQueueState") {
             if (chatId == 0L) return@section
-            context.getSharedPreferences("player_prefs", Context.MODE_PRIVATE).edit()
-                .putString(
-                    "queue_ids_$chatId",
-                    playlist.joinToString(",") { it.messageId.toString() },
-                )
-                .putString(
-                    "base_ids_$chatId",
-                    basePlaylist.joinToString(",") {
-                        it.messageId.toString()
-                    },
-                )
-                .putString("play_order_$chatId", _uiState.value.playOrder.name)
-                .putString("filters_$chatId", _uiState.value.queueFilters.toJson())
-                .apply()
+            playerState.saveQueue(
+                chatId,
+                playOrder = _uiState.value.playOrder.name,
+                filters = _uiState.value.queueFilters.toJson(),
+                baseIds = basePlaylist.joinToString(",") { it.messageId.toString() },
+                queueIds = playlist.joinToString(",") { it.messageId.toString() },
+            )
         }
     }
 
@@ -1021,7 +1014,7 @@ class PlayerViewModel @Inject constructor(
             )
             learnLyricsDuration()
             activeTrackRepository.set(track, chatId, chatTitle)
-            saveLastPlayed(chatId, track.messageId)
+            playerState.setLastPlayed(chatId, track.messageId)
             activeTrackRepository.updateTrack(displayTrack)
             activeTrackRepository.updateAlbumArt(albumArt)
             refreshNextTrackState()
@@ -1335,7 +1328,7 @@ class PlayerViewModel @Inject constructor(
         // Deferred too: the mini-player/lock screen must not name the new track while the old one
         // is still audible, and a download that never completes must not be recorded as last-played.
         activeTrackRepository.set(track, chatId, chatTitle)
-        saveLastPlayed(chatId, track.messageId)
+        playerState.setLastPlayed(chatId, track.messageId)
         activeTrackRepository.updateTrack(displayTrack)
         activeTrackRepository.updateAlbumArt(albumArt)
 
@@ -1549,17 +1542,6 @@ class PlayerViewModel @Inject constructor(
                 out.toByteArray()
             }
         }.getOrDefault(bytes)
-    }
-
-    private fun saveLastPlayed(chatId: Long, messageId: Long) {
-        context.getSharedPreferences("player_prefs", Context.MODE_PRIVATE)
-            .edit().putLong("last_played_$chatId", messageId).apply()
-    }
-
-    private fun getLastPlayed(chatId: Long): Long? {
-        val id = context.getSharedPreferences("player_prefs", Context.MODE_PRIVATE)
-            .getLong("last_played_$chatId", -1L)
-        return if (id == -1L) null else id
     }
 
     override fun onCleared() {

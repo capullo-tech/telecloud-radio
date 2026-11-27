@@ -21,7 +21,7 @@ dependencyResolutionManagement {
     }
     versionCatalogs {
         // Shared org toolchain, pinned by commit from jitpack.
-        create("libs") { from("com.github.capullo-tech:build-conventions:22483910a0cd6d7e583ec3d268ad1c8f872bb4ba") }
+        create("libs") { from("com.github.capullo-tech:build-conventions:c772e4f9bdb4d16bd7141c3459dcf4863513c00c") }
         // Local pins: inter-repo capullo coordinates + TC's own deps + the non-BOM Compose libs.
         create("pins") { from(files("gradle/pins.versions.toml")) }
     }
