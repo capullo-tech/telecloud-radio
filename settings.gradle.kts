@@ -14,9 +14,14 @@ pluginManagement {
 dependencyResolutionManagement {
     repositoriesMode.set(RepositoriesMode.FAIL_ON_PROJECT_REPOS)
     repositories {
+        // capullo-tech coordinates exist only on jitpack. Without this, Gradle asks Maven Central for
+        // them first, and CI has failed on Maven Central's 429 answers to those lookups.
+        exclusiveContent {
+            forRepository { maven { url = uri("https://jitpack.io") } }
+            filter { includeGroupAndSubgroups("com.github.capullo-tech") }
+        }
         google()
         mavenCentral()
-        // lib-snapcast-android + capullo-audio(-ui)/source-telegram + build-conventions (all jitpack)
         maven { url = uri("https://jitpack.io") }
     }
     versionCatalogs {
